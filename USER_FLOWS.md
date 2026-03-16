@@ -33,7 +33,7 @@ To sign out, scroll to the bottom of any tab and click **Sign out**.
 
 1. Click **+ New** in the top-right of the Distributions tab.
 2. Enter a **label** (e.g. "ETHDenver booth #3").
-3. Choose an **expiry**: Never, 1 day, 7 days, or 30 days. When the distribution link should become inactive. Might be paused manually.
+3. Choose an **expiry**: Never, 1 day, 7 days, or 30 days — after which the distribution link becomes inactive. You can also pause it manually at any time.
 4. Click **Create Session**.
 
 The new distribution appears in the list immediately.
