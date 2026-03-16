@@ -7,8 +7,8 @@ import { gnosis } from 'viem/chains';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const AUTH_BASE      = 'https://staging.circlesubi.network/auth';
-const REFERRALS_BASE = 'https://staging.circlesubi.network/referrals';
+const AUTH_BASE      = 'https://auth.aboutcircles.com';
+const REFERRALS_BASE = 'https://referrals.aboutcircles.com';
 const SESSION_BASE   = 'https://circles.gnosis.io/invitation';
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -25,6 +25,8 @@ let selectedExpiry   = 0;     // days; 0 = no expiry
 let myInvitesOffset  = 0;
 const MY_INVITES_PAGE = 50;
 let myInvitesTotal   = 0;
+let myInvitesClaimed = [];  // accumulates claimed refs across batches
+let loadKeysClaimed  = [];  // accumulates claimed keys across batches
 
 let currentSessions   = [];         // cache for session picker
 let assignTargetKeys  = [];         // [{ id }] being assigned in modal
@@ -324,11 +326,9 @@ function renderGroupAssignRow(sessionId) {
   const assigned = getSessionGroup(sessionId);
   const valueEl  = document.getElementById('groupAssignValue');
   if (assigned) {
-    valueEl.innerHTML = `<a href="https://app.gnosis.io/${escapeAttr(assigned.group)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:inherit;" onclick="event.stopPropagation()">${escapeHtml(assigned.name || assigned.group)}</a>`;
+    valueEl.textContent = assigned.name || assigned.group;
     valueEl.classList.remove('none');
-    // clicks on the link should not open the picker
-    valueEl.onclick = null;
-    valueEl.querySelector('a').addEventListener('click', e => e.stopPropagation());
+    valueEl.onclick = openGroupPickModal;
   } else {
     valueEl.textContent = 'No group';
     valueEl.classList.add('none');
@@ -373,8 +373,8 @@ async function trustAddressesInGroup(groupAddress, addresses) {
   if (!toTrust.length) return [];
 
   const txs = [];
-  // trustBatchWithConditions accepts up to ~200 at a time safely
-  const BATCH = 200;
+  // trustBatchWithConditions batched in chunks of 30
+  const BATCH = 30;
   for (let i = 0; i < toTrust.length; i += BATCH) {
     const chunk = toTrust.slice(i, i + BATCH);
     txs.push({
@@ -399,7 +399,7 @@ async function untrustAddressesInGroup(groupAddress, addresses) {
   if (!toUntrust.length) return [];
 
   const txs = [];
-  const BATCH = 200;
+  const BATCH = 30;
   for (let i = 0; i < toUntrust.length; i += BATCH) {
     const chunk = toUntrust.slice(i, i + BATCH);
     txs.push({
@@ -414,7 +414,6 @@ async function untrustAddressesInGroup(groupAddress, addresses) {
 
 // ── Group picker modal ────────────────────────────────────────────────────────
 
-document.getElementById('groupAssignBtn').addEventListener('click', openGroupPickModal);
 document.getElementById('groupAssignValue').addEventListener('click', openGroupPickModal);
 document.getElementById('cancelGroupPickBtn').addEventListener('click', () => {
   document.getElementById('groupPickModal').classList.remove('show');
@@ -491,7 +490,7 @@ async function selectSessionGroup(sessionId, newGroup) {
     const existing = await fetchGroupMembers(oldGroup.group);
     const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
     if (toUntrust.length) {
-      const BATCH = 200;
+      const BATCH = 30;
       for (let i = 0; i < toUntrust.length; i += BATCH) {
         const chunk = toUntrust.slice(i, i + BATCH);
         txs.push({ to: oldGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }), value: '0' });
@@ -505,7 +504,7 @@ async function selectSessionGroup(sessionId, newGroup) {
     const existing = await fetchGroupMembers(newGroup.group);
     const toTrust  = addresses.filter(a => !existing.has(a.toLowerCase()));
     if (toTrust.length) {
-      const BATCH = 200;
+      const BATCH = 30;
       for (let i = 0; i < toTrust.length; i += BATCH) {
         const chunk = toTrust.slice(i, i + BATCH);
         txs.push({ to: newGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, MAX_UINT96] }), value: '0' });
@@ -545,7 +544,7 @@ async function removeSessionGroup(sessionId, fromModal = false) {
       const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
       if (toUntrust.length) {
         const txs = [];
-        const BATCH = 200;
+        const BATCH = 30;
         for (let i = 0; i < toUntrust.length; i += BATCH) {
           const chunk = toUntrust.slice(i, i + BATCH);
           txs.push({ to: oldGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }), value: '0' });
@@ -565,7 +564,7 @@ async function removeSessionGroup(sessionId, fromModal = false) {
 // ── My Invites ────────────────────────────────────────────────────────────────
 
 async function loadMyInvites(reset = false) {
-  if (reset) myInvitesOffset = 0;
+  if (reset) { myInvitesOffset = 0; myInvitesClaimed = []; }
   const content = document.getElementById('myInvitesContent');
   if (reset) content.innerHTML = '<div class="empty-state">Loading…</div>';
 
@@ -593,35 +592,34 @@ async function loadMyInvites(reset = false) {
       return;
     }
 
-    content.querySelector('.load-more-btn')?.remove();
     content.querySelector('.claimed-toggle')?.remove();
     content.querySelector('.claimed-list')?.remove();
 
     const active  = data.referrals.filter(r => r.status !== 'claimed' && !r.sessions.length);
     const claimed = data.referrals.filter(r => r.status === 'claimed');
+    myInvitesClaimed.push(...claimed);
 
-    // Insert select-all row on first load
-    if (myInvitesOffset === 0 && active.length) {
-      let selectAllRow = document.getElementById('selectAllRow');
-      if (!selectAllRow) {
-        selectAllRow = document.createElement('div');
-        selectAllRow.id = 'selectAllRow';
-        selectAllRow.className = 'invite-row select-all-row';
-        selectAllRow.innerHTML = `
-          <input type="checkbox" id="selectAllChk" class="invite-checkbox">
-          <label for="selectAllChk" style="font-size:12px;color:#6a6c8c;cursor:pointer;flex:1;">Select all</label>
-        `;
-        selectAllRow.querySelector('#selectAllChk').addEventListener('change', (e) => {
-          const checked = e.target.checked;
-          content.querySelectorAll('.invite-checkbox[data-ref-id]').forEach(chk => {
-            chk.checked = checked;
-            if (checked) selectedRefIds.add(chk.dataset.refId);
-            else selectedRefIds.delete(chk.dataset.refId);
-          });
-          updateBulkAssignBar();
+    // Ensure select-all row exists as soon as there are active invites
+    if (active.length && !document.getElementById('selectAllRow')) {
+      const selectAllRow = document.createElement('div');
+      selectAllRow.id = 'selectAllRow';
+      selectAllRow.className = 'invite-row select-all-row';
+      selectAllRow.innerHTML = `
+        <input type="checkbox" id="selectAllChk" class="invite-checkbox">
+        <label for="selectAllChk" style="font-size:12px;color:#6a6c8c;cursor:pointer;">Select all</label>
+        <span id="bulkAssignCount" style="font-size:12px;font-weight:600;color:#3730a3;margin-left:8px;"></span>
+        <button class="btn-sm" id="bulkAssignBtn" style="visibility:hidden;margin-left:auto;">Assign to session →</button>
+      `;
+      selectAllRow.querySelector('#selectAllChk').addEventListener('change', (e) => {
+        const checked = e.target.checked;
+        content.querySelectorAll('.invite-checkbox[data-ref-id]').forEach(chk => {
+          chk.checked = checked;
+          if (checked) selectedRefIds.add(chk.dataset.refId);
+          else selectedRefIds.delete(chk.dataset.refId);
         });
-        content.insertBefore(selectAllRow, content.firstChild);
-      }
+        updateBulkAssignBar();
+      });
+      content.insertBefore(selectAllRow, content.firstChild);
     }
 
     for (const ref of active) {
@@ -630,7 +628,7 @@ async function loadMyInvites(reset = false) {
 
       const pillHtml = ref.status === 'confirmed'
         ? '<span class="pill pill-active">Confirmed</span>'
-        : '<span class="pill pill-pool">Pool</span>';
+        : '';
 
       row.innerHTML = `
         <input type="checkbox" class="invite-checkbox" data-ref-id="${escapeAttr(ref.id)}" ${selectedRefIds.has(ref.id) ? 'checked' : ''}>
@@ -648,17 +646,17 @@ async function loadMyInvites(reset = false) {
       content.appendChild(row);
     }
 
-    // Claimed collapsed section
-    if (claimed.length) {
+    // Claimed collapsed section (all accumulated)
+    if (myInvitesClaimed.length) {
       const toggle = document.createElement('button');
       toggle.className = 'claimed-toggle load-more-btn';
-      toggle.textContent = `${claimed.length} claimed invite${claimed.length === 1 ? '' : 's'}`;
+      toggle.textContent = `${myInvitesClaimed.length} claimed invite${myInvitesClaimed.length === 1 ? '' : 's'}`;
 
       const claimedList = document.createElement('div');
       claimedList.className = 'claimed-list';
       claimedList.style.display = 'none';
 
-      for (const ref of claimed) {
+      for (const ref of myInvitesClaimed) {
         const row = document.createElement('div');
         row.className = 'invite-row';
         row.innerHTML = `
@@ -674,7 +672,7 @@ async function loadMyInvites(reset = false) {
         const open = claimedList.style.display !== 'none';
         claimedList.style.display = open ? 'none' : '';
         toggle.textContent = open
-          ? `${claimed.length} claimed invite${claimed.length === 1 ? '' : 's'}`
+          ? `${myInvitesClaimed.length} claimed invite${myInvitesClaimed.length === 1 ? '' : 's'}`
           : 'Hide claimed';
       });
 
@@ -684,15 +682,11 @@ async function loadMyInvites(reset = false) {
 
     myInvitesOffset += data.referrals.length;
 
-    if (myInvitesOffset < data.total) {
-      const btn = document.createElement('button');
-      btn.className = 'load-more-btn';
-      btn.textContent = `Load more (${data.total - myInvitesOffset} remaining)`;
-      btn.addEventListener('click', () => loadMyInvites(false));
-      content.appendChild(btn);
-    }
-
     updateBulkAssignBar();
+
+    if (myInvitesOffset < data.total) {
+      loadMyInvites(false);
+    }
 
   } catch (e) {
     if (reset) content.innerHTML = `<div class="empty-state" style="color:#b91c1c;">Error: ${e.message}</div>`;
@@ -712,13 +706,16 @@ function syncSelectAll() {
 }
 
 function updateBulkAssignBar() {
-  const bar = document.getElementById('bulkAssignBar');
   const count = selectedRefIds.size;
+  const countEl = document.getElementById('bulkAssignCount');
+  const assignBtn = document.getElementById('bulkAssignBtn');
+  if (!countEl) return;
   if (count === 0) {
-    bar.style.display = 'none';
+    countEl.textContent = '';
+    if (assignBtn) assignBtn.style.visibility = 'hidden';
   } else {
-    bar.style.display = 'flex';
-    document.getElementById('bulkAssignCount').textContent = `${count} selected`;
+    countEl.textContent = `${count} selected`;
+    if (assignBtn) assignBtn.style.visibility = 'visible';
   }
 }
 
@@ -752,7 +749,7 @@ async function openAssignModal(refEntry) {
         <div class="assign-session-item" data-session-id="${escapeAttr(s.id)}" data-session-label="${escapeAttr(s.label || s.slug)}">
           <div>
             <div class="session-label">${escapeHtml(s.label || '(unnamed)')}</div>
-            <div class="session-slug">/${escapeHtml(s.slug)}${escapeHtml(expiryStr)}</div>
+            <div class="session-slug">${escapeHtml(expiryStr)}</div>
           </div>
           <span style="font-size:11px;color:#6a6c8c;">${(s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0)} total</span>
         </div>
@@ -810,16 +807,11 @@ document.getElementById('cancelAssignBtn').addEventListener('click', () => {
   document.getElementById('assignModal').classList.remove('show');
 });
 
-document.getElementById('bulkAssignBtn').addEventListener('click', () => {
-  if (!selectedRefIds.size) return;
-  openAssignModal(null);
-});
-
-document.getElementById('bulkClearBtn').addEventListener('click', () => {
-  selectedRefIds.clear();
-  document.querySelectorAll('#myInvitesContent .invite-checkbox').forEach(chk => { chk.checked = false; });
-  syncSelectAll();
-  updateBulkAssignBar();
+document.getElementById('myInvitesContent').addEventListener('click', (e) => {
+  if (e.target.id === 'bulkAssignBtn') {
+    if (!selectedRefIds.size) return;
+    openAssignModal(null);
+  }
 });
 
 // ── Auth flow ─────────────────────────────────────────────────────────────────
@@ -972,19 +964,21 @@ document.getElementById('submitPoolKeysBtn').addEventListener('click', async () 
 
   try {
     // storeBatch max 200 per call
-    let totalStored = 0, totalFailed = 0;
-
     for (let i = 0; i < keys.length; i += 200) {
       const chunk = keys.slice(i, i + 200);
       const invitations = chunk.map(pk => ({ privateKey: pk, inviter: connectedAddress }));
-      const data = await referrals.storeBatch(invitations);
-      totalStored += data.stored;
-      totalFailed += data.failed;
+      const res = await fetch(`${REFERRALS_BASE}/store-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ invitations }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
     }
 
-    let msg = `Stored <strong>${totalStored}</strong> key(s).`;
-    if (totalFailed) msg += ` ${totalFailed} failed (duplicate or invalid).`;
-    showResult(result, 'success', msg);
+    showResult(result, 'success', `Stored <strong>${keys.length}</strong> key(s).`);
     document.getElementById('poolKeysInput').value = '';
     loadMyInvites(true);
   } catch (e) {
@@ -1048,7 +1042,6 @@ function renderSessions(sessions) {
           </div>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;">
-          <span class="session-slug">/${escapeHtml(s.slug)}</span>
           <div style="display:flex;align-items:center;gap:4px;">
             ${expiryTag}
             <button class="btn-copy-link" data-copy-id="${escapeAttr(s.id)}" data-copy-slug="${escapeAttr(s.slug)}">🔗 Copy invitation link</button>
@@ -1155,14 +1148,15 @@ function renderSessionDetail(s) {
   const expiry    = formatExpiry(s.expiresAt);
   const expiryStr = expiry ? ` · ${expiry.label}` : '';
   document.getElementById('detailMeta').textContent =
-    `/${s.slug} · ${s.paused ? 'Paused' : 'Active'}${expiryStr}`;
+    `${s.paused ? 'Paused' : 'Active'}${expiryStr}`;
 
   const total   = (s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0);
   const claimed = s.claimedCount ?? 0;
   document.getElementById('statsSummary').textContent = `${claimed} claimed, ${total} total`;
 
   const pauseBtn = document.getElementById('pauseBtn');
-  pauseBtn.textContent = s.paused ? 'Resume' : 'Pause';
+  pauseBtn.textContent = s.paused ? '▶' : '⏸';
+  pauseBtn.title       = s.paused ? 'Resume' : 'Pause';
 
   // Render copy link + params buttons in detail header
   const hasParams = !!getSessionParams(s.id);
@@ -1202,7 +1196,7 @@ async function loadQuota() {
     });
     if (quota > 0n) {
       valEl.textContent = quota.toString();
-      const maxCount = Math.min(20, Number(quota));
+      const maxCount = Math.min(10, Number(quota));
       const countInput = document.getElementById('generateCount');
       countInput.max   = maxCount;
       if (parseInt(countInput.value, 10) > maxCount) countInput.value = maxCount;
@@ -1217,7 +1211,7 @@ async function generateInvitations() {
   const btn    = document.getElementById('generateInvitesBtn');
   const result = document.getElementById('generateResult');
   const countInput = document.getElementById('generateCount');
-  const COUNT  = Math.min(20, Math.max(1, parseInt(countInput.value, 10) || 20));
+  const COUNT  = Math.min(10, Math.max(1, parseInt(countInput.value, 10) || 10));
 
   btn.disabled = true;
   clearResult(result);
@@ -1276,14 +1270,7 @@ async function generateInvitations() {
       { to: HUB,             data: transferData, value: '0' },
     ]);
 
-    // 4. Store batch in referrals API
-    showResult(result, 'pending', 'Storing invitations in API…');
-    const invitations = keypairs.map(k => ({ privateKey: k.privateKey, inviter: connectedAddress }));
-    for (let i = 0; i < invitations.length; i += 200) {
-      await referrals.storeBatch(invitations.slice(i, i + 200));
-    }
-
-    // 5. Add keys to current session
+    // 4. Add keys to current session
     showResult(result, 'pending', 'Adding to session…');
     const privateKeys = keypairs.map(k => k.privateKey);
     for (let i = 0; i < privateKeys.length; i += 100) {
@@ -1353,10 +1340,19 @@ document.getElementById('pauseBtn').addEventListener('click', async () => {
   btn.disabled = false;
 });
 
+document.getElementById('addKeysBtn').addEventListener('click', () => {
+  const panel = document.getElementById('addKeysPanel');
+  const btn   = document.getElementById('addKeysBtn');
+  const showing = panel.style.display !== 'none';
+  panel.style.display = showing ? 'none' : '';
+  btn.style.display   = showing ? '' : 'none';
+});
+
 document.getElementById('cancelAddKeysBtn').addEventListener('click', clearAddKeysPanel);
 
 function clearAddKeysPanel() {
   document.getElementById('addKeysPanel').style.display = 'none';
+  document.getElementById('addKeysBtn').style.display = '';
   document.getElementById('keysInput').value = '';
   clearResult(document.getElementById('addKeysResult'));
 }
@@ -1399,7 +1395,7 @@ document.getElementById('submitKeysBtn').addEventListener('click', async () => {
     if (allErrors.length) msg += `<br>${allErrors.length} error(s).`;
 
     showResult(result, 'success', msg);
-    document.getElementById('keysInput').value = '';
+    clearAddKeysPanel();
     await refreshDetail();
   } catch (e) {
     showResult(result, 'error', 'Failed: ' + e.message);
@@ -1411,7 +1407,7 @@ document.getElementById('submitKeysBtn').addEventListener('click', async () => {
 // ── Keys list ─────────────────────────────────────────────────────────────────
 
 async function loadKeys(reset = false) {
-  if (reset) keysOffset = 0;
+  if (reset) { keysOffset = 0; loadKeysClaimed = []; }
   const list = document.getElementById('keysList');
   if (reset) list.innerHTML = '<div style="font-size:12px;color:#9b9db3;padding:8px 0;">Loading invites…</div>';
 
@@ -1428,12 +1424,12 @@ async function loadKeys(reset = false) {
       return;
     }
 
-    list.querySelector('.load-more-btn')?.remove();
     list.querySelector('.claimed-toggle')?.remove();
     list.querySelector('.claimed-list')?.remove();
 
     const active  = data.keys.filter(k => k.status !== 'claimed');
     const claimed = data.keys.filter(k => k.status === 'claimed');
+    loadKeysClaimed.push(...claimed);
 
     function makeKeyRow(k) {
       const row         = document.createElement('div');
@@ -1498,21 +1494,21 @@ async function loadKeys(reset = false) {
       list.appendChild(makeKeyRow(k));
     }
 
-    if (claimed.length) {
+    if (loadKeysClaimed.length) {
       const toggle = document.createElement('button');
       toggle.className = 'claimed-toggle load-more-btn';
-      toggle.textContent = `${claimed.length} claimed invite${claimed.length === 1 ? '' : 's'}`;
+      toggle.textContent = `${loadKeysClaimed.length} claimed invite${loadKeysClaimed.length === 1 ? '' : 's'}`;
 
       const claimedList = document.createElement('div');
       claimedList.className = 'claimed-list';
       claimedList.style.display = 'none';
-      for (const k of claimed) claimedList.appendChild(makeKeyRow(k));
+      for (const k of loadKeysClaimed) claimedList.appendChild(makeKeyRow(k));
 
       toggle.addEventListener('click', () => {
         const open = claimedList.style.display !== 'none';
         claimedList.style.display = open ? 'none' : '';
         toggle.textContent = open
-          ? `${claimed.length} claimed invite${claimed.length === 1 ? '' : 's'}`
+          ? `${loadKeysClaimed.length} claimed invite${loadKeysClaimed.length === 1 ? '' : 's'}`
           : 'Hide claimed';
       });
 
@@ -1523,11 +1519,7 @@ async function loadKeys(reset = false) {
     keysOffset += data.keys.length;
 
     if (keysOffset < data.total) {
-      const btn = document.createElement('button');
-      btn.className   = 'load-more-btn';
-      btn.textContent = `Load more (${data.total - keysOffset} remaining)`;
-      btn.addEventListener('click', () => loadKeys(false));
-      list.appendChild(btn);
+      loadKeys(false);
     }
   } catch (e) {
     if (reset) list.innerHTML = `<div class="empty-state" style="color:#b91c1c;">Error: ${e.message}</div>`;
@@ -1552,7 +1544,6 @@ function openReassignModal(keyEntry, row) {
       <div class="assign-session-item" data-session-id="${escapeAttr(s.id)}" data-session-label="${escapeAttr(s.label || s.slug)}">
         <div>
           <div class="session-label">${escapeHtml(s.label || '(unnamed)')}</div>
-          <div class="session-slug">/${escapeHtml(s.slug)}</div>
         </div>
         <span style="font-size:11px;color:#6a6c8c;">${(s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0)} total</span>
       </div>

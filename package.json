@@ -6,16 +6,18 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 5182"
+    "preview": "vite preview --port 5182",
+    "deploy": "vite build && gh-pages -d dist -r https://github.com/aboutcircles/circles-invitation-links-manager.git -b gh-pages"
   },
   "devDependencies": {
+    "gh-pages": "^6.3.0",
     "vite": "^6.4.1"
   },
   "dependencies": {
     "@aboutcircles/miniapp-sdk": "^0.1.24",
+    "@aboutcircles/sdk-abis": "file:../new-sdk/packages/abis",
     "@aboutcircles/sdk-referrals": "file:../new-sdk/packages/referrals",
     "@aboutcircles/sdk-rpc": "file:../new-sdk/packages/rpc",
-    "@aboutcircles/sdk-abis": "file:../new-sdk/packages/abis",
     "viem": "^2.46.3"
   }
 }

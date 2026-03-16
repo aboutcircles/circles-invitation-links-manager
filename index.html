@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Referrals Session Manager</title>
+    <title>Invitation Manager</title>
     <link rel="stylesheet" href="./style.css">
     <style>
         /* ── Views ─────────────────────────────────────────────────────── */
@@ -479,17 +479,14 @@
 
 <!-- ── View: Auth ──────────────────────────────────────────────────────────── -->
 <div class="card view active" id="view-auth">
-    <h2>Referrals Manager</h2>
-    <p class="subtitle">Sign in to manage your invitation sessions</p>
+    <h2>Invitation Manager</h2>
+    <p class="subtitle">Sign in to manage your invitations</p>
 
     <div class="status disconnected" id="status">
-        Waiting for wallet connection...
+        Waiting for account connection...
     </div>
 
     <div id="auth-panel" style="display:none">
-        <p style="font-size:13px;color:#6a6c8c;margin-bottom:12px;">
-            Sign in with your wallet to access the referrals API.
-        </p>
         <button id="challengeBtn">Sign in</button>
         <div class="result" id="challengeResult"></div>
     </div>
@@ -498,69 +495,59 @@
 <!-- ── View: Sessions list ─────────────────────────────────────────────────── -->
 <div class="card view" id="view-sessions">
     <div class="nav-tabs">
-        <button class="nav-tab nav-tab-sessions active">Sessions</button>
+        <button class="nav-tab nav-tab-sessions active">Distributions</button>
         <button class="nav-tab nav-tab-invites">My invitation codes</button>
     </div>
 
     <div class="sessions-header">
-        <h3>Invitation Sessions</h3>
+        <h3>Invitation Distribution</h3>
         <button class="btn-sm" id="newSessionBtn">+ New</button>
     </div>
 
     <div id="sessionsContent">
-        <div class="empty-state">Loading sessions…</div>
+        <div class="empty-state">Loading distributions</div>
     </div>
 
     <div style="margin-top:12px;text-align:right;">
         <button class="btn-secondary btn-sm" id="signOutBtn">Sign out</button>
     </div>
+
 </div>
 
 <!-- ── View: Session detail ────────────────────────────────────────────────── -->
 <div class="card view" id="view-detail">
     <div class="nav-tabs">
-        <button class="nav-tab nav-tab-sessions active">Sessions</button>
-        <button class="nav-tab nav-tab-invites">My invitation codes</button>
+        <button class="nav-tab nav-tab-sessions active">Distributions</button>
+        <button class="nav-tab nav-tab-invites">My Invites</button>
     </div>
 
-    <button class="back-btn" id="backBtn">← Sessions</button>
+    <button class="back-btn" id="backBtn">← Distributions</button>
 
     <div class="detail-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
         <div>
-            <div class="detail-label" id="detailLabel">Session</div>
+            <div class="detail-label" id="detailLabel">Distribution</div>
             <div class="detail-meta" id="detailMeta"></div>
         </div>
-        <button class="btn-secondary btn-sm" id="refreshDetailBtn" title="Refresh" style="padding:4px 8px;font-size:14px;line-height:1;">↻</button>
+        <div style="display:flex;gap:6px;">
+            <button class="btn-secondary btn-sm" id="pauseBtn" title="Pause" style="padding:4px 8px;font-size:14px;line-height:1;">⏸</button>
+            <button class="btn-secondary btn-sm" id="refreshDetailBtn" title="Refresh" style="padding:4px 8px;font-size:14px;line-height:1;">↻</button>
+        </div>
     </div>
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <button class="btn-secondary btn-sm" id="pauseBtn">Pause</button>
         <!-- Quota / generate (shown only when quota > 0) -->
         <div id="quotaRow" style="display:none;align-items:center;gap:8px;flex:1;padding:4px 10px;background:#f0fdf4;border:1px solid #bbf7ca;border-radius:8px;">
             <span style="font-size:12px;color:#15803d;flex:1;">Quota: <strong id="quotaValue">0</strong></span>
-            <input id="generateCount" type="number" min="1" max="20" value="20" style="width:48px;padding:3px 5px;border:1px solid #bbf7ca;border-radius:6px;font-size:12px;text-align:center;background:#fff;">
-            <button class="btn-sm" id="generateInvitesBtn" style="background:#15803d;padding:4px 10px;">Create invites</button>
+            <input id="generateCount" type="number" min="1" max="10" value="10" style="width:48px;padding:3px 5px;border:1px solid #bbf7ca;border-radius:6px;font-size:12px;text-align:center;background:#fff;">
+            <button class="btn-sm" id="generateInvitesBtn" style="background:#15803d;padding:4px 8px;font-size:16px;line-height:1;" title="Create invites">＋</button>
         </div>
     </div>
     <div class="result" id="generateResult" style="margin-bottom:12px;"></div>
-
-    <!-- Add keys panel (hidden by default) -->
-    <div id="addKeysPanel" style="display:none;margin-bottom:16px;">
-        <div class="section-title">Add Private Keys (one per line)</div>
-        <textarea class="keys-textarea" id="keysInput" placeholder="0x1a2b3c...&#10;0x4d5e6f..."></textarea>
-        <p class="keys-hint">Each key is a 32-byte secp256k1 private key (0x + 64 hex chars)</p>
-        <div style="display:flex;gap:8px;">
-            <button class="btn-secondary btn-sm" id="cancelAddKeysBtn">Cancel</button>
-            <button class="btn-sm" id="submitKeysBtn">Add Keys</button>
-        </div>
-        <div class="result" id="addKeysResult"></div>
-    </div>
 
     <!-- Group assignment row -->
     <div class="group-assign-row">
         <span class="group-assign-label">Group</span>
         <span class="group-assign-value none" id="groupAssignValue">No group</span>
-        <button class="btn-group-settings" id="groupAssignBtn" title="Change group">⚙</button>
     </div>
     <div class="result group-assign-result" id="groupAssignResult"></div>
 
@@ -571,12 +558,24 @@
     </div>
     <div id="refreshSpinner" style="display:none;text-align:center;padding:8px;font-size:12px;color:#9b9db3;">Refreshing…</div>
     <div id="keysList"></div>
+
+    <!-- Add keys panel (at bottom of list) -->
+    <div id="addKeysPanel" style="display:none;margin-top:12px;">
+        <textarea class="keys-textarea" id="keysInput" placeholder="0x1a2b3c...&#10;0x4d5e6f..."></textarea>
+        <p class="keys-hint">One private key per line (0x + 64 hex chars)</p>
+        <div style="display:flex;gap:8px;">
+            <button class="btn-secondary btn-sm" id="cancelAddKeysBtn">Cancel</button>
+            <button class="btn-sm" id="submitKeysBtn">Add Keys</button>
+        </div>
+        <div class="result" id="addKeysResult"></div>
+    </div>
+    <button class="btn-secondary btn-sm" id="addKeysBtn" style="width:100%;margin-top:10px;">+ Add keys manually</button>
 </div>
 
 <!-- ── View: My Invites ────────────────────────────────────────────────────── -->
 <div class="card view" id="view-myinvites">
     <div class="nav-tabs">
-        <button class="nav-tab nav-tab-sessions">Sessions</button>
+        <button class="nav-tab nav-tab-sessions">Distributions</button>
         <button class="nav-tab nav-tab-invites active">My Invites</button>
     </div>
 
@@ -585,19 +584,8 @@
         <button class="btn-sm" id="addToPoolBtn">+ Add Keys</button>
     </div>
 
-    <!-- Bulk assign bar (hidden until selection) -->
-    <div id="bulkAssignBar" style="display:none;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:#f0f4ff;border:1px solid #c7d2fe;border-radius:10px;">
-        <span id="bulkAssignCount" style="font-size:13px;font-weight:600;color:#3730a3;flex:1;"></span>
-        <button class="btn-sm" id="bulkAssignBtn">Assign to session →</button>
-        <button class="btn-secondary btn-sm" id="bulkClearBtn">Clear</button>
-    </div>
-
-    <div id="myInvitesContent">
-        <div class="empty-state">Loading…</div>
-    </div>
-
     <!-- Add keys to pool panel (hidden by default) -->
-    <div id="addToPoolPanel" style="display:none;margin-bottom:16px;margin-top:16px;">
+    <div id="addToPoolPanel" style="display:none;margin-bottom:16px;">
         <div class="section-title">Store Private Keys (one per line)</div>
         <textarea class="keys-textarea" id="poolKeysInput" placeholder="0x1a2b3c...&#10;0x4d5e6f..."></textarea>
         <p class="keys-hint">Each key is a 32-byte secp256k1 private key (0x + 64 hex chars)</p>
@@ -606,6 +594,10 @@
             <button class="btn-sm" id="submitPoolKeysBtn">Store Keys</button>
         </div>
         <div class="result" id="addToPoolResult"></div>
+    </div>
+
+    <div id="myInvitesContent">
+        <div class="empty-state">Loading…</div>
     </div>
 
     <div style="margin-top:12px;text-align:right;">
