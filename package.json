@@ -1,0 +1,21 @@
+{
+  "name": "circles-invitation-links-manager",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5182"
+  },
+  "devDependencies": {
+    "vite": "^6.4.1"
+  },
+  "dependencies": {
+    "@aboutcircles/miniapp-sdk": "^0.1.24",
+    "@aboutcircles/sdk-referrals": "file:../new-sdk/packages/referrals",
+    "@aboutcircles/sdk-rpc": "file:../new-sdk/packages/rpc",
+    "@aboutcircles/sdk-abis": "file:../new-sdk/packages/abis",
+    "viem": "^2.46.3"
+  }
+}

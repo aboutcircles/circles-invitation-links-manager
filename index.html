@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Referrals Session Manager</title>
+    <link rel="stylesheet" href="./style.css">
+    <style>
+        /* ── Views ─────────────────────────────────────────────────────── */
+        .view { display: none; }
+        .view.active { display: block; }
+
+        /* ── Auth panel ─────────────────────────────────────────────────── */
+        .auth-actions { display: flex; gap: 8px; margin-top: 12px; }
+        .auth-actions button { flex: 1; }
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid #ede1d8;
+            color: #060a40;
+        }
+        .btn-secondary:hover:not(:disabled) { background: #faf5f1; opacity: 1; }
+
+        /* ── Nav tabs ───────────────────────────────────────────────────── */
+        .nav-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+        .nav-tab {
+            flex: 1; padding: 8px; border: 1px solid #ede1d8;
+            border-radius: 8px; background: transparent;
+            font-size: 13px; font-weight: 500; color: #6a6c8c; cursor: pointer;
+        }
+        .nav-tab.active { background: #060a40; color: #fff; border-color: #060a40; }
+
+        /* ── Sessions list ──────────────────────────────────────────────── */
+        .sessions-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .sessions-header h3 { font-size: 15px; font-weight: 600; }
+        .btn-sm {
+            width: auto;
+            padding: 8px 14px;
+            font-size: 13px;
+        }
+        .session-card {
+            border: 1px solid #ede1d8;
+            border-radius: 12px;
+            padding: 14px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .session-card:hover { border-color: #9b9db3; background: #faf5f1; }
+        .session-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        .session-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: #060a40;
+        }
+        .session-slug {
+            font-family: 'SF Mono', ui-monospace, monospace;
+            font-size: 11px;
+            color: #9b9db3;
+        }
+        .session-stats {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: #6a6c8c;
+        }
+        .stat-item { display: flex; flex-direction: column; gap: 2px; }
+        .stat-num {
+            font-size: 18px;
+            font-weight: 700;
+            color: #060a40;
+            line-height: 1;
+        }
+        .stat-num.green { color: #158030; }
+        .stat-num.orange { color: #b54708; }
+        .pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .pill-paused   { background: #fef9c3; color: #854d0e; }
+        .pill-active   { background: #f0fdf3; color: #158030; }
+        .pill-expired  { background: #fef2f2; color: #b91c1c; }
+        .pill-pool     { background: #eff6ff; color: #1d4ed8; }
+        .pill-session  { background: #f3e8ff; color: #7c3aed; }
+        .pill-claimed  { background: #f0fdf4; color: #15803d; opacity: 0.75; }
+        .empty-state {
+            text-align: center;
+            padding: 32px 16px;
+            color: #9b9db3;
+            font-size: 14px;
+        }
+
+        /* ── Session detail ─────────────────────────────────────────────── */
+        .back-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: none;
+            border: none;
+            color: #6a6c8c;
+            font-size: 13px;
+            width: auto;
+            padding: 0;
+            margin-bottom: 16px;
+            cursor: pointer;
+        }
+        .back-btn:hover { color: #060a40; opacity: 1; }
+        .detail-header { margin-bottom: 20px; }
+        .detail-label {
+            font-size: 17px;
+            font-weight: 700;
+            color: #060a40;
+            margin-bottom: 4px;
+        }
+        .detail-meta {
+            font-size: 12px;
+            color: #9b9db3;
+            font-family: 'SF Mono', ui-monospace, monospace;
+        }
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .stat-box {
+            border: 1px solid #ede1d8;
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-box .stat-num { font-size: 24px; }
+        .stat-box .stat-label {
+            font-size: 11px;
+            color: #9b9db3;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 4px;
+        }
+        .detail-actions { display: flex; gap: 8px; margin-bottom: 20px; }
+        .detail-actions button { flex: 1; }
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #9b9db3;
+            margin-bottom: 10px;
+        }
+        .key-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 9px 12px;
+            border: 1px solid #ede1d8;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            gap: 8px;
+        }
+        .key-addr {
+            font-family: 'SF Mono', ui-monospace, monospace;
+            color: #060a40;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .key-status {
+            padding: 2px 6px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .status-queued     { background: #eff6ff; color: #1d4ed8; }
+        .status-dispatched { background: #fff7ed; color: #c2410c; }
+        .status-claimed    { background: #f0fdf4; color: #15803d; }
+        .load-more-btn {
+            width: 100%;
+            padding: 10px;
+            background: transparent;
+            border: 1px dashed #ede1d8;
+            border-radius: 8px;
+            color: #9b9db3;
+            font-size: 13px;
+            margin-top: 6px;
+            cursor: pointer;
+        }
+        .load-more-btn:hover { border-color: #9b9db3; color: #6a6c8c; opacity: 1; }
+
+        /* ── Key action buttons ──────────────────────────────────────────── */
+        .key-actions { display: flex; gap: 4px; }
+        .btn-xs {
+            padding: 3px 8px; font-size: 11px; border-radius: 6px;
+            border: 1px solid #ede1d8; background: transparent;
+            color: #060a40; cursor: pointer; white-space: nowrap;
+        }
+        .btn-xs:hover { background: #faf5f1; }
+        .btn-xs.danger { border-color: #fca5a5; color: #b91c1c; }
+        .btn-xs.danger:hover { background: #fef2f2; }
+
+        /* ── Add keys panel ─────────────────────────────────────────────── */
+        .keys-textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 10px 12px;
+            border: 1px solid #ede1d8;
+            border-radius: 10px;
+            font-size: 12px;
+            font-family: 'SF Mono', ui-monospace, monospace;
+            color: #060a40;
+            background: #faf5f1;
+            resize: vertical;
+        }
+        .keys-textarea:focus { outline: none; border-color: #9b9db3; }
+        .keys-hint {
+            font-size: 11px;
+            color: #9b9db3;
+            margin-top: 6px;
+            margin-bottom: 12px;
+        }
+
+        /* ── Create session modal ───────────────────────────────────────── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: #fff;
+            border-radius: 16px;
+            padding: 24px;
+            width: 100%;
+            max-width: 380px;
+        }
+        .modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+        .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
+        .modal-actions button { flex: 1; }
+        .expiry-opts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+        .expiry-opt {
+            padding: 5px 12px;
+            border: 1px solid #ede1d8;
+            border-radius: 999px;
+            font-size: 12px;
+            cursor: pointer;
+            background: #faf5f1;
+            color: #060a40;
+            transition: all 0.12s;
+        }
+        .expiry-opt.selected {
+            border-color: #060a40;
+            background: #060a40;
+            color: #fff;
+        }
+
+        /* ── Assign / Reassign session modals ───────────────────────────── */
+        .assign-session-list {
+            max-height: 260px;
+            overflow-y: auto;
+        }
+        .assign-session-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border: 1px solid #ede1d8;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .assign-session-item:hover { background: #faf5f1; border-color: #9b9db3; }
+        .assign-session-item .session-label { font-size: 13px; }
+        .assign-session-item .session-slug  { font-size: 11px; }
+
+        /* ── Checkbox ───────────────────────────────────────────────────── */
+        .invite-checkbox {
+            width: 15px; height: 15px; flex-shrink: 0;
+            accent-color: #060a40; cursor: pointer;
+        }
+        .select-all-row { background: #faf5f1; border-radius: 8px; }
+
+        /* ── My Invites view ────────────────────────────────────────────── */
+        .invite-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 12px;
+            border: 1px solid #ede1d8;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+        .invite-row .key-addr { flex: 1; }
+
+        /* ── Misc ───────────────────────────────────────────────────────── */
+        .expiry-tag { font-size: 11px; color: #9b9db3; }
+        .expiry-tag.soon { color: #b91c1c; }
+        .token-badge {
+            font-size: 10px;
+            font-family: 'SF Mono', ui-monospace, monospace;
+            background: #f0fdf3;
+            color: #15803d;
+            padding: 3px 8px;
+            border-radius: 6px;
+            border: 1px solid #bbf7ca;
+            margin-top: 4px;
+            display: inline-block;
+            cursor: pointer;
+        }
+
+        /* ── Copy link button ────────────────────────────────────────────── */
+        .btn-copy-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border: 1px solid #ede1d8;
+            border-radius: 6px;
+            background: transparent;
+            color: #6a6c8c;
+            font-size: 11px;
+            cursor: pointer;
+            width: auto;
+            transition: background 0.12s, color 0.12s, border-color 0.12s;
+            white-space: nowrap;
+        }
+        .btn-copy-link:hover { background: #faf5f1; color: #060a40; border-color: #9b9db3; opacity: 1; }
+        .btn-copy-link.copied { background: #f0fdf4; color: #15803d; border-color: #bbf7ca; }
+
+        /* ── Custom params ───────────────────────────────────────────────── */
+        .btn-params {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border: 1px solid #ede1d8;
+            border-radius: 6px;
+            background: transparent;
+            color: #6a6c8c;
+            font-size: 11px;
+            cursor: pointer;
+            width: auto;
+            transition: background 0.12s, color 0.12s;
+            white-space: nowrap;
+        }
+        .btn-params:hover { background: #faf5f1; color: #060a40; opacity: 1; }
+        .btn-params.has-params { border-color: #c7d2fe; color: #3730a3; background: #eef2ff; }
+        .params-panel {
+            background: #faf5f1;
+            border: 1px solid #ede1d8;
+            border-radius: 10px;
+            padding: 12px;
+            margin-top: 8px;
+        }
+        .params-panel-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #9b9db3;
+            margin-bottom: 8px;
+        }
+        .params-textarea {
+            width: 100%;
+            min-height: 72px;
+            padding: 8px 10px;
+            border: 1px solid #ede1d8;
+            border-radius: 8px;
+            font-size: 12px;
+            font-family: 'SF Mono', ui-monospace, monospace;
+            color: #060a40;
+            background: #fff;
+            resize: vertical;
+        }
+        .params-textarea:focus { outline: none; border-color: #9b9db3; }
+        .params-hint { font-size: 11px; color: #9b9db3; margin-top: 5px; margin-bottom: 8px; }
+        .params-actions { display: flex; gap: 6px; }
+
+        /* ── Group assignment row ────────────────────────────────────────── */
+        .group-assign-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 10px;
+            border: 1px solid #ede1d8;
+            border-radius: 10px;
+            margin-bottom: 16px;
+            background: #faf5f1;
+        }
+        .group-assign-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #9b9db3;
+            flex-shrink: 0;
+        }
+        .group-assign-value {
+            font-size: 13px;
+            font-weight: 600;
+            color: #060a40;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-color: #c7c9df;
+            text-underline-offset: 2px;
+        }
+        .group-assign-value:hover { color: #3730a3; text-decoration-color: #3730a3; }
+        .group-assign-value.none {
+            color: #9b9db3;
+            font-weight: 400;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .group-assign-value.none:hover { color: #6a6c8c; }
+        .btn-group-settings {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border: 1px solid #ede1d8;
+            border-radius: 6px;
+            background: transparent;
+            color: #9b9db3;
+            font-size: 13px;
+            cursor: pointer;
+            flex-shrink: 0;
+            width: auto;
+            padding: 3px 6px;
+            transition: background 0.12s, color 0.12s;
+        }
+        .btn-group-settings:hover { background: #fff; color: #060a40; border-color: #9b9db3; opacity: 1; }
+        .group-assign-result { margin-top: 8px; }
+
+        /* ── Group picker modal ──────────────────────────────────────────── */
+        .group-pick-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border: 1px solid #ede1d8;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .group-pick-item:hover { background: #faf5f1; border-color: #9b9db3; }
+        .group-pick-item.selected { border-color: #060a40; background: #f0f0f8; }
+        .group-pick-name { font-size: 13px; font-weight: 500; color: #060a40; }
+        .group-pick-role { font-size: 10px; color: #9b9db3; font-style: italic; }
+        .group-pick-list { max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+
+<!-- ── View: Auth ──────────────────────────────────────────────────────────── -->
+<div class="card view active" id="view-auth">
+    <h2>Referrals Manager</h2>
+    <p class="subtitle">Sign in to manage your invitation sessions</p>
+
+    <div class="status disconnected" id="status">
+        Waiting for wallet connection...
+    </div>
+
+    <div id="auth-panel" style="display:none">
+        <p style="font-size:13px;color:#6a6c8c;margin-bottom:12px;">
+            Sign in with your wallet to access the referrals API.
+        </p>
+        <button id="challengeBtn">Sign in</button>
+        <div class="result" id="challengeResult"></div>
+    </div>
+</div>
+
+<!-- ── View: Sessions list ─────────────────────────────────────────────────── -->
+<div class="card view" id="view-sessions">
+    <div class="nav-tabs">
+        <button class="nav-tab nav-tab-sessions active">Sessions</button>
+        <button class="nav-tab nav-tab-invites">My invitation codes</button>
+    </div>
+
+    <div class="sessions-header">
+        <h3>Invitation Sessions</h3>
+        <button class="btn-sm" id="newSessionBtn">+ New</button>
+    </div>
+
+    <div id="sessionsContent">
+        <div class="empty-state">Loading sessions…</div>
+    </div>
+
+    <div style="margin-top:12px;text-align:right;">
+        <button class="btn-secondary btn-sm" id="signOutBtn">Sign out</button>
+    </div>
+</div>
+
+<!-- ── View: Session detail ────────────────────────────────────────────────── -->
+<div class="card view" id="view-detail">
+    <div class="nav-tabs">
+        <button class="nav-tab nav-tab-sessions active">Sessions</button>
+        <button class="nav-tab nav-tab-invites">My invitation codes</button>
+    </div>
+
+    <button class="back-btn" id="backBtn">← Sessions</button>
+
+    <div class="detail-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
+        <div>
+            <div class="detail-label" id="detailLabel">Session</div>
+            <div class="detail-meta" id="detailMeta"></div>
+        </div>
+        <button class="btn-secondary btn-sm" id="refreshDetailBtn" title="Refresh" style="padding:4px 8px;font-size:14px;line-height:1;">↻</button>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <button class="btn-secondary btn-sm" id="pauseBtn">Pause</button>
+        <!-- Quota / generate (shown only when quota > 0) -->
+        <div id="quotaRow" style="display:none;align-items:center;gap:8px;flex:1;padding:4px 10px;background:#f0fdf4;border:1px solid #bbf7ca;border-radius:8px;">
+            <span style="font-size:12px;color:#15803d;flex:1;">Quota: <strong id="quotaValue">0</strong></span>
+            <input id="generateCount" type="number" min="1" max="20" value="20" style="width:48px;padding:3px 5px;border:1px solid #bbf7ca;border-radius:6px;font-size:12px;text-align:center;background:#fff;">
+            <button class="btn-sm" id="generateInvitesBtn" style="background:#15803d;padding:4px 10px;">Create invites</button>
+        </div>
+    </div>
+    <div class="result" id="generateResult" style="margin-bottom:12px;"></div>
+
+    <!-- Add keys panel (hidden by default) -->
+    <div id="addKeysPanel" style="display:none;margin-bottom:16px;">
+        <div class="section-title">Add Private Keys (one per line)</div>
+        <textarea class="keys-textarea" id="keysInput" placeholder="0x1a2b3c...&#10;0x4d5e6f..."></textarea>
+        <p class="keys-hint">Each key is a 32-byte secp256k1 private key (0x + 64 hex chars)</p>
+        <div style="display:flex;gap:8px;">
+            <button class="btn-secondary btn-sm" id="cancelAddKeysBtn">Cancel</button>
+            <button class="btn-sm" id="submitKeysBtn">Add Keys</button>
+        </div>
+        <div class="result" id="addKeysResult"></div>
+    </div>
+
+    <!-- Group assignment row -->
+    <div class="group-assign-row">
+        <span class="group-assign-label">Group</span>
+        <span class="group-assign-value none" id="groupAssignValue">No group</span>
+        <button class="btn-group-settings" id="groupAssignBtn" title="Change group">⚙</button>
+    </div>
+    <div class="result group-assign-result" id="groupAssignResult"></div>
+
+    <!-- Keys list -->
+    <div style="display:flex;align-items:baseline;gap:8px;margin-top:16px;margin-bottom:8px;">
+        <div class="section-title" style="margin:0;">Invites</div>
+        <span id="statsSummary" style="font-size:12px;color:#6b7280;"></span>
+    </div>
+    <div id="refreshSpinner" style="display:none;text-align:center;padding:8px;font-size:12px;color:#9b9db3;">Refreshing…</div>
+    <div id="keysList"></div>
+</div>
+
+<!-- ── View: My Invites ────────────────────────────────────────────────────── -->
+<div class="card view" id="view-myinvites">
+    <div class="nav-tabs">
+        <button class="nav-tab nav-tab-sessions">Sessions</button>
+        <button class="nav-tab nav-tab-invites active">My Invites</button>
+    </div>
+
+    <div class="sessions-header">
+        <h3>My invitation codes</h3>
+        <button class="btn-sm" id="addToPoolBtn">+ Add Keys</button>
+    </div>
+
+    <!-- Bulk assign bar (hidden until selection) -->
+    <div id="bulkAssignBar" style="display:none;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:#f0f4ff;border:1px solid #c7d2fe;border-radius:10px;">
+        <span id="bulkAssignCount" style="font-size:13px;font-weight:600;color:#3730a3;flex:1;"></span>
+        <button class="btn-sm" id="bulkAssignBtn">Assign to session →</button>
+        <button class="btn-secondary btn-sm" id="bulkClearBtn">Clear</button>
+    </div>
+
+    <div id="myInvitesContent">
+        <div class="empty-state">Loading…</div>
+    </div>
+
+    <!-- Add keys to pool panel (hidden by default) -->
+    <div id="addToPoolPanel" style="display:none;margin-bottom:16px;margin-top:16px;">
+        <div class="section-title">Store Private Keys (one per line)</div>
+        <textarea class="keys-textarea" id="poolKeysInput" placeholder="0x1a2b3c...&#10;0x4d5e6f..."></textarea>
+        <p class="keys-hint">Each key is a 32-byte secp256k1 private key (0x + 64 hex chars)</p>
+        <div style="display:flex;gap:8px;">
+            <button class="btn-secondary btn-sm" id="cancelAddToPoolBtn">Cancel</button>
+            <button class="btn-sm" id="submitPoolKeysBtn">Store Keys</button>
+        </div>
+        <div class="result" id="addToPoolResult"></div>
+    </div>
+
+    <div style="margin-top:12px;text-align:right;">
+        <button class="btn-secondary btn-sm" id="myInvitesSignOutBtn">Sign out</button>
+    </div>
+</div>
+
+<!-- ── Modal: Create session ───────────────────────────────────────────────── -->
+<div class="modal-overlay" id="createModal">
+    <div class="modal">
+        <h3>New Session</h3>
+
+        <div class="field">
+            <label>Label</label>
+            <input type="text" id="newLabel" placeholder="e.g. ETHDenver booth #3" maxlength="80">
+        </div>
+
+        <div class="field">
+            <label>Expires</label>
+            <div class="expiry-opts">
+                <span class="expiry-opt selected" data-days="0">Never</span>
+                <span class="expiry-opt" data-days="1">1 day</span>
+                <span class="expiry-opt" data-days="7">7 days</span>
+                <span class="expiry-opt" data-days="30">30 days</span>
+            </div>
+        </div>
+
+        <div class="result" id="createResult"></div>
+
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancelCreateBtn">Cancel</button>
+            <button id="confirmCreateBtn">Create Session</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Modal: Assign to session (from My Invites) ─────────────────────────── -->
+<div class="modal-overlay" id="assignModal">
+    <div class="modal">
+        <h3>Assign to session</h3>
+        <div class="assign-session-list" id="assignSessionList">
+            <div class="empty-state">No sessions available.</div>
+        </div>
+
+        <div class="result" id="assignResult" style="margin-top:8px;"></div>
+
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancelAssignBtn">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Modal: Custom GET params for a session ─────────────────────────────── -->
+<div class="modal-overlay" id="paramsModal">
+    <div class="modal">
+        <h3>Custom GET Parameters</h3>
+        <p style="font-size:13px;color:#6a6c8c;margin-bottom:14px;">
+            These params will be appended to the session link when copying.<br>
+            Useful for UTM tags or any tracking parameters.
+        </p>
+        <div class="field">
+            <label>Parameters</label>
+            <textarea class="params-textarea" id="paramsInput" placeholder="utm_source=booth&utm_medium=qr&utm_campaign=ethdenver"></textarea>
+        </div>
+        <p class="params-hint">Enter as key=value pairs separated by &amp; — do not include the leading ?</p>
+        <div class="result" id="paramsResult"></div>
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancelParamsBtn">Cancel</button>
+            <button id="saveParamsBtn">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Modal: Pick group for session ──────────────────────────────────────── -->
+<div class="modal-overlay" id="groupPickModal">
+    <div class="modal">
+        <h3>Assign Group</h3>
+        <p style="font-size:13px;color:#6a6c8c;margin-bottom:14px;">
+            All invitation accounts in this session will be trusted in the selected group.
+            Changing or removing will untrust them from the previous group.
+        </p>
+        <div class="group-pick-list" id="groupPickList">
+            <div class="empty-state">Loading groups…</div>
+        </div>
+        <div style="margin-top:8px;">
+            <div class="group-pick-item" id="groupPickNone">
+                <span class="group-pick-name" style="color:#9b9db3;">No group</span>
+                <span class="group-pick-role">remove assignment</span>
+            </div>
+        </div>
+        <div class="result" id="groupPickResult" style="margin-top:8px;"></div>
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancelGroupPickBtn">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Modal: Reassign key to another session (from session detail) ────────── -->
+<div class="modal-overlay" id="reassignModal">
+    <div class="modal">
+        <h3>Move to another session</h3>
+        <div class="assign-session-list" id="reassignSessionList">
+            <div class="empty-state">No other sessions available.</div>
+        </div>
+        <div class="result" id="reassignResult" style="margin-top:8px;"></div>
+        <div class="modal-actions">
+            <button class="btn-secondary" id="cancelReassignBtn">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>
