@@ -1,5 +1,5 @@
 import { onWalletChange, signMessage, sendTransactions } from '@aboutcircles/miniapp-sdk';
-import { Distributions, Referrals } from '@aboutcircles/sdk-referrals';
+import { Distributions, Referrals } from '@aboutcircles/sdk-invitations';
 import { CirclesRpc, PagedQuery } from '@aboutcircles/sdk-rpc';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { encodeFunctionData, encodeAbiParameters, keccak256, encodePacked, createPublicClient, http, type Hex, type Address } from 'viem';

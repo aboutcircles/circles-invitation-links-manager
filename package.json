@@ -15,10 +15,10 @@
     "vite": "^6.4.1"
   },
   "dependencies": {
-    "@aboutcircles/miniapp-sdk": "^0.1.24",
-    "@aboutcircles/sdk-abis": "file:../new-sdk/packages/abis",
-    "@aboutcircles/sdk-referrals": "file:../new-sdk/packages/referrals",
-    "@aboutcircles/sdk-rpc": "file:../new-sdk/packages/rpc",
+    "@aboutcircles/miniapp-sdk": "^0.1.25",
+    "@aboutcircles/sdk-abis": "^0.1.25",
+    "@aboutcircles/sdk-invitations": "^0.1.25",
+    "@aboutcircles/sdk-rpc": "^0.1.25",
     "viem": "^2.46.3"
   }
 }
