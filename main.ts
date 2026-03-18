@@ -235,7 +235,7 @@ function copySessionLink(sessionId: string, slug: string, btn: HTMLButtonElement
   const link = buildSessionLink(sessionId, slug);
   const resetBtn = () => {
     btn.classList.remove('copied');
-    btn.innerHTML = '🔗 Copy invitation link';
+    btn.innerHTML = '🔗 Copy Link';
   };
   const markCopied = () => {
     btn.classList.add('copied');
@@ -499,7 +499,7 @@ async function selectSessionGroup(sessionId: string, newGroup: GroupEntry): Prom
     return;
   }
 
-  showResult(result, 'pending', 'Loading session keys…');
+  showResult(result, 'pending', 'Loading magic link keys…');
   const keys = await loadAllSessionKeys(sessionId).catch((e: Error) => { showResult(result, 'error', e.message); return null; });
   if (!keys) return;
 
@@ -552,7 +552,7 @@ async function removeSessionGroup(sessionId: string, fromModal = false): Promise
   if (!oldGroup) return;
 
   const result = document.getElementById('groupAssignResult')!;
-  showResult(result, 'pending', 'Loading session keys…');
+  showResult(result, 'pending', 'Loading magic link keys…');
 
   try {
     const keys      = await loadAllSessionKeys(sessionId);
@@ -626,7 +626,7 @@ async function loadMyInvites(reset = false): Promise<void> {
         <input type="checkbox" id="selectAllChk" class="invite-checkbox">
         <label for="selectAllChk" style="font-size:12px;color:#6a6c8c;cursor:pointer;">Select all</label>
         <span id="bulkAssignCount" style="font-size:12px;font-weight:600;color:#3730a3;margin-left:8px;"></span>
-        <button class="btn-sm" id="bulkAssignBtn" style="visibility:hidden;margin-left:auto;">Assign to session →</button>
+        <button class="btn-sm" id="bulkAssignBtn" style="visibility:hidden;margin-left:auto;">Assign to magic link →</button>
       `;
       selectAllRow.querySelector('#selectAllChk')!.addEventListener('change', (e) => {
         const checked = (e.target as HTMLInputElement).checked;
@@ -753,7 +753,7 @@ async function openAssignModal(refEntry: { id: string } | null): Promise<void> {
   const activeSessions = currentSessions.filter(s => !s.paused);
 
   if (!activeSessions.length) {
-    list.innerHTML = '<div class="empty-state">No active sessions available.<br>Create a session first.</div>';
+    list.innerHTML = '<div class="empty-state">No active magic links available.<br>Create a magic link first.</div>';
   } else {
     list.innerHTML = activeSessions.map(s => {
       const expiry    = formatExpiry(s.expiresAt);
@@ -895,6 +895,7 @@ document.getElementById('challengeBtn')!.addEventListener('click', async () => {
     show('view-sessions');
     setSessionsTabActive();
     loadSessions();
+    loadQuota();
   } catch (e) {
     showResult(result, 'error', 'Failed: ' + (e as Error).message);
     btn.disabled = false;
@@ -1014,7 +1015,7 @@ function renderSessions(sessions: Session[]): void {
   const content = document.getElementById('sessionsContent')!;
 
   if (!sessions.length) {
-    content.innerHTML = '<div class="empty-state">No sessions yet.<br>Create one to start distributing invites.</div>';
+    content.innerHTML = '<div class="empty-state">No magic links yet.<br>Create one to start distributing invites.</div>';
     return;
   }
 
@@ -1051,8 +1052,8 @@ function renderSessions(sessions: Session[]): void {
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;">
           <div style="display:flex;align-items:center;gap:4px;">
             ${expiryTag}
-            <button class="btn-copy-link" data-copy-id="${escapeAttr(s.id)}" data-copy-slug="${escapeAttr(s.slug)}">🔗 Copy invitation link</button>
-            <button class="btn-params${hasParams ? ' has-params' : ''}" data-params-id="${escapeAttr(s.id)}" title="Custom GET parameters">⚙ GET params</button>
+            <button class="btn-copy-link" data-copy-id="${escapeAttr(s.id)}" data-copy-slug="${escapeAttr(s.slug)}">🔗 Copy Link</button>
+            <button class="btn-params${hasParams ? ' has-params' : ''}" data-params-id="${escapeAttr(s.id)}" title="Add parameters">＋ Add parameters</button>
           </div>
         </div>
       </div>
@@ -1112,7 +1113,7 @@ document.getElementById('confirmCreateBtn')!.addEventListener('click', async () 
   const label  = (document.getElementById('newLabel') as HTMLInputElement).value.trim();
 
   btn.disabled = true;
-  showResult(result, 'pending', 'Creating session…');
+  showResult(result, 'pending', 'Creating magic link…');
 
   try {
     const body: Record<string, unknown> = { inviterAddress: connectedAddress };
@@ -1173,8 +1174,8 @@ function renderSessionDetail(s: Session): void {
     document.getElementById('detailMeta')!.after(detailActions);
   }
   detailActions.innerHTML = `
-    <button class="btn-copy-link" id="detailCopyBtn">🔗 Copy invitation link</button>
-    <button class="btn-params${hasParams ? ' has-params' : ''}" id="detailParamsBtn">⚙ GET params</button>
+    <button class="btn-copy-link" id="detailCopyBtn">🔗 Copy Link</button>
+    <button class="btn-params${hasParams ? ' has-params' : ''}" id="detailParamsBtn">＋ Add parameters</button>
   `;
   document.getElementById('detailCopyBtn')!.addEventListener('click', () => {
     copySessionLink(s.id, s.slug, document.getElementById('detailCopyBtn') as HTMLButtonElement);
@@ -1187,9 +1188,14 @@ function renderSessionDetail(s: Session): void {
 // ── Quota & generate invitations ──────────────────────────────────────────────
 
 async function loadQuota(): Promise<void> {
-  const row   = document.getElementById('quotaRow')!;
-  const valEl = document.getElementById('quotaValue')!;
-  row.style.display = 'none';
+  const row    = document.getElementById('quotaRow')!;
+  const valEl  = document.getElementById('quotaValue')!;
+  const banner = document.getElementById('quotaBanner')!;
+  const bannerVal = document.getElementById('quotaBannerValue')!;
+  row.style.display    = 'none';
+  banner.style.display = 'none';
+  const bannerEmpty = document.getElementById('quotaBannerEmpty')!;
+  bannerEmpty.style.display = 'none';
   if (!connectedAddress) return;
 
   try {
@@ -1200,12 +1206,18 @@ async function loadQuota(): Promise<void> {
       args: [connectedAddress as Address],
     });
     if (quota > 0n) {
-      valEl.textContent = quota.toString();
+      const quotaStr   = quota.toString();
+      valEl.textContent       = quotaStr;
+      bannerVal.textContent   = quotaStr;
       const maxCount   = Math.min(10, Number(quota));
       const countInput = document.getElementById('generateCount') as HTMLInputElement;
       countInput.max   = maxCount.toString();
       if (parseInt(countInput.value, 10) > maxCount) countInput.value = maxCount.toString();
-      row.style.display = 'flex';
+      row.style.display     = 'flex';
+      banner.style.display  = 'block';
+      bannerEmpty.style.display = 'none';
+    } else {
+      bannerEmpty.style.display = 'block';
     }
   } catch { /* non-fatal */ }
 }
@@ -1532,7 +1544,7 @@ function openReassignModal(keyEntry: KeyEntry, row: HTMLDivElement): void {
   const otherSessions = currentSessions.filter(s => s.id !== currentSession?.id && !s.paused);
 
   if (!otherSessions.length) {
-    list.innerHTML = '<div class="empty-state">No other active sessions available.</div>';
+    list.innerHTML = '<div class="empty-state">No other active magic links available.</div>';
   } else {
     list.innerHTML = otherSessions.map(s => `
       <div class="assign-session-item" data-session-id="${escapeAttr(s.id)}" data-session-label="${escapeAttr(s.label || s.slug)}">
