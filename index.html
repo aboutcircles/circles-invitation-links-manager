@@ -334,38 +334,39 @@
         .btn-copy-link {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 3px 8px;
-            border: 1px solid #ede1d8;
-            border-radius: 6px;
-            background: transparent;
-            color: #6a6c8c;
-            font-size: 11px;
+            gap: 5px;
+            padding: 5px 12px;
+            border: none;
+            border-radius: 7px;
+            background: #060a40;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
             cursor: pointer;
             width: auto;
-            transition: background 0.12s, color 0.12s, border-color 0.12s;
+            transition: background 0.12s, opacity 0.12s;
             white-space: nowrap;
         }
-        .btn-copy-link:hover { background: #faf5f1; color: #060a40; border-color: #9b9db3; opacity: 1; }
-        .btn-copy-link.copied { background: #f0fdf4; color: #15803d; border-color: #bbf7ca; }
+        .btn-copy-link:hover { background: #1a2060; opacity: 1; }
+        .btn-copy-link.copied { background: #15803d; }
 
         /* ── Custom params ───────────────────────────────────────────────── */
         .btn-params {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 3px 8px;
-            border: 1px solid #ede1d8;
-            border-radius: 6px;
+            padding: 5px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 7px;
             background: transparent;
-            color: #6a6c8c;
+            color: #6b7280;
             font-size: 11px;
             cursor: pointer;
             width: auto;
-            transition: background 0.12s, color 0.12s;
+            transition: background 0.12s, color 0.12s, border-color 0.12s;
             white-space: nowrap;
         }
-        .btn-params:hover { background: #faf5f1; color: #060a40; opacity: 1; }
+        .btn-params:hover { background: #f3f4f6; color: #374151; border-color: #9ca3af; opacity: 1; }
         .btn-params.has-params { border-color: #c7d2fe; color: #3730a3; background: #eef2ff; }
         .params-panel {
             background: #faf5f1;
@@ -476,7 +477,7 @@
         .group-pick-role { font-size: 10px; color: #9b9db3; font-style: italic; }
         .group-pick-list { max-height: 300px; overflow-y: auto; }
     </style>
-  <script type="module" crossorigin src="/circles-invitation-links-manager/assets/main-CECXiOHH.js"></script>
+  <script type="module" crossorigin src="/circles-invitation-links-manager/assets/main-8JsHWdN2.js"></script>
   <link rel="stylesheet" crossorigin href="/circles-invitation-links-manager/assets/main-DPINysQi.css">
 </head>
 <body>
@@ -485,6 +486,19 @@
 <div class="card view active" id="view-auth">
     <h2>Invitation Manager</h2>
     <p class="subtitle">Sign in to manage your invitations</p>
+
+    <div style="margin:16px 0;padding:14px 16px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;font-size:13px;color:#4c4570;line-height:1.6;">
+        <strong style="display:block;margin-bottom:6px;color:#3b2f6e;">What this app does</strong>
+        This tool lets users with quota access create <strong>magic links</strong> that:
+        <ul style="margin:6px 0 0 0;padding-left:18px;">
+            <li>Let anybody create a Gnosis App account with a Circles invite</li>
+            <li>Automatically add new accounts to a group</li>
+            <li>Include UTM tags and tracking parameters</li>
+            <li>Have an optional expiry date</li>
+            <li>Can be put on hold at any time</li>
+        </ul>
+        <span style="display:block;margin-top:8px;">You can also manage manually created invitation links.</span>
+    </div>
 
     <div class="status disconnected" id="status">
         Waiting for account connection...
@@ -499,17 +513,34 @@
 <!-- ── View: Sessions list ─────────────────────────────────────────────────── -->
 <div class="card view" id="view-sessions">
     <div class="nav-tabs">
-        <button class="nav-tab nav-tab-sessions active">Distributions</button>
-        <button class="nav-tab nav-tab-invites">My invitation codes</button>
+        <button class="nav-tab nav-tab-sessions active">Magic Links</button>
+        <button class="nav-tab nav-tab-invites">Individual Links</button>
+    </div>
+
+    <div style="margin:12px 0 16px;padding:12px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;font-size:12px;color:#075985;line-height:1.6;">
+        <strong style="display:block;margin-bottom:4px;">How it works</strong>
+        <ol style="margin:0;padding-left:18px;">
+            <li>Create a new magic link.</li>
+            <li>Charge it with invites from your quota.</li>
+            <li>Add additional information (group, UTM tags, expiry).</li>
+            <li>Manage campaigns by reassigning invites between links.</li>
+        </ol>
+    </div>
+
+    <div id="quotaBanner" style="display:none;margin-bottom:12px;padding:10px 14px;background:#f0fdf4;border:1px solid #bbf7ca;border-radius:10px;font-size:13px;color:#15803d;">
+        Your quota: <strong id="quotaBannerValue">0</strong> invites available
+    </div>
+    <div id="quotaBannerEmpty" style="display:none;margin-bottom:12px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;font-size:13px;color:#92400e;">
+        You don't have any invite quota yet. Get in touch with the Circles team to request access.
     </div>
 
     <div class="sessions-header">
-        <h3>Invitation Distribution</h3>
+        <h3>Magic Links</h3>
         <button class="btn-sm" id="newSessionBtn">+ New</button>
     </div>
 
     <div id="sessionsContent">
-        <div class="empty-state">Loading distributions</div>
+        <div class="empty-state">Loading…</div>
     </div>
 
     <div style="margin-top:12px;text-align:right;">
@@ -521,11 +552,11 @@
 <!-- ── View: Session detail ────────────────────────────────────────────────── -->
 <div class="card view" id="view-detail">
     <div class="nav-tabs">
-        <button class="nav-tab nav-tab-sessions active">Distributions</button>
-        <button class="nav-tab nav-tab-invites">My Invites</button>
+        <button class="nav-tab nav-tab-sessions active">Magic Links</button>
+        <button class="nav-tab nav-tab-invites">Individual Links</button>
     </div>
 
-    <button class="back-btn" id="backBtn">← Distributions</button>
+    <button class="back-btn" id="backBtn">← Magic Links</button>
 
     <div class="detail-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
         <div>
@@ -579,14 +610,14 @@
 <!-- ── View: My Invites ────────────────────────────────────────────────────── -->
 <div class="card view" id="view-myinvites">
     <div class="nav-tabs">
-        <button class="nav-tab nav-tab-sessions">Distributions</button>
-        <button class="nav-tab nav-tab-invites active">My Invites</button>
+        <button class="nav-tab nav-tab-sessions">Magic Links</button>
+        <button class="nav-tab nav-tab-invites active">Individual Links</button>
     </div>
 
     <div class="sessions-header">
-        <h3>My invitation codes</h3>
-        <button class="btn-sm" id="addToPoolBtn">+ Add Keys</button>
+        <h3>Individual Links</h3>
     </div>
+    <p style="font-size:12px;color:#6b7280;margin:-8px 0 14px;">These invitation codes are generated through the app and can be assigned to magic links as well.</p>
 
     <!-- Add keys to pool panel (hidden by default) -->
     <div id="addToPoolPanel" style="display:none;margin-bottom:16px;">
@@ -598,6 +629,10 @@
             <button class="btn-sm" id="submitPoolKeysBtn">Store Keys</button>
         </div>
         <div class="result" id="addToPoolResult"></div>
+    </div>
+
+    <div style="margin-bottom:12px;">
+        <button id="addToPoolBtn" style="background:none;border:none;padding:0;font-size:12px;color:#9b9db3;cursor:pointer;text-decoration:underline;text-underline-offset:2px;">+ Add keys manually (advanced)</button>
     </div>
 
     <div id="myInvitesContent">
@@ -612,7 +647,7 @@
 <!-- ── Modal: Create session ───────────────────────────────────────────────── -->
 <div class="modal-overlay" id="createModal">
     <div class="modal">
-        <h3>New Session</h3>
+        <h3>New Magic Link</h3>
 
         <div class="field">
             <label>Label</label>
@@ -633,7 +668,7 @@
 
         <div class="modal-actions">
             <button class="btn-secondary" id="cancelCreateBtn">Cancel</button>
-            <button id="confirmCreateBtn">Create Session</button>
+            <button id="confirmCreateBtn">Create Magic Link</button>
         </div>
     </div>
 </div>
@@ -641,7 +676,7 @@
 <!-- ── Modal: Assign to session (from My Invites) ─────────────────────────── -->
 <div class="modal-overlay" id="assignModal">
     <div class="modal">
-        <h3>Assign to session</h3>
+        <h3>Assign to Magic Link</h3>
         <div class="assign-session-list" id="assignSessionList">
             <div class="empty-state">No sessions available.</div>
         </div>
@@ -657,9 +692,9 @@
 <!-- ── Modal: Custom GET params for a session ─────────────────────────────── -->
 <div class="modal-overlay" id="paramsModal">
     <div class="modal">
-        <h3>Custom GET Parameters</h3>
+        <h3>Add Parameters</h3>
         <p style="font-size:13px;color:#6a6c8c;margin-bottom:14px;">
-            These params will be appended to the session link when copying.<br>
+            These params will be appended to the magic link when copying.<br>
             Useful for UTM tags or any tracking parameters.
         </p>
         <div class="field">
@@ -702,7 +737,7 @@
 <!-- ── Modal: Reassign key to another session (from session detail) ────────── -->
 <div class="modal-overlay" id="reassignModal">
     <div class="modal">
-        <h3>Move to another session</h3>
+        <h3>Move to another Magic Link</h3>
         <div class="assign-session-list" id="reassignSessionList">
             <div class="empty-state">No other sessions available.</div>
         </div>
