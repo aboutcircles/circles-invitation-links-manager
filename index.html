@@ -566,7 +566,13 @@
         <div style="display:flex;gap:6px;">
             <button class="btn-secondary btn-sm" id="pauseBtn" title="Pause" style="padding:4px 8px;font-size:14px;line-height:1;">⏸</button>
             <button class="btn-secondary btn-sm" id="refreshDetailBtn" title="Refresh" style="padding:4px 8px;font-size:14px;line-height:1;">↻</button>
+            <button class="btn-secondary btn-sm" id="deleteSessionBtn" title="Delete session" style="padding:4px 8px;font-size:14px;line-height:1;color:#dc2626;border-color:#fca5a5;">🗑</button>
         </div>
+    </div>
+    <div id="deleteConfirmRow" style="display:none;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;">
+        <span style="font-size:13px;color:#dc2626;flex:1;">Delete this session? This cannot be undone.</span>
+        <button class="btn-sm" id="confirmDeleteBtn" style="background:#dc2626;padding:4px 10px;font-size:13px;">Delete</button>
+        <button class="btn-secondary btn-sm" id="cancelDeleteBtn" style="padding:4px 10px;font-size:13px;">Cancel</button>
     </div>
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">

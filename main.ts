@@ -518,6 +518,44 @@ async function fetchGroupMembers(groupAddress: string): Promise<Set<string>> {
   return addrs;
 }
 
+/**
+ * Detect which controlled group a session's keys belong to, independent of localStorage.
+ * Samples up to 3 unclaimed/dispatched keys, derives their account addresses,
+ * then checks each controlled group for membership of all sampled addresses.
+ * Returns the first matching GroupEntry, or null if none found.
+ */
+async function detectSessionGroup(sessionId: string): Promise<GroupEntry | null> {
+  // Ensure controlled groups are loaded
+  if (!controlledGroups.length) {
+    if (!connectedAddress) return null;
+    try {
+      controlledGroups = await fetchControlledGroups(connectedAddress);
+    } catch { return null; }
+  }
+  if (!controlledGroups.length) return null;
+
+  // Sample up to 3 queued/dispatched keys that have an accountAddress from the API
+  const allKeys = await loadAllSessionKeys(sessionId).catch(() => [] as KeyEntry[]);
+  const addresses = allKeys
+    .filter(k => k.accountAddress && (k.status === 'queued' || k.status === 'dispatched'))
+    .slice(0, 3)
+    .map(k => k.accountAddress!);
+
+  if (!addresses.length) return null;
+
+  // Find first controlled group where all sampled addresses are members
+  for (const group of controlledGroups) {
+    try {
+      const members = await fetchGroupMembers(group.group);
+      if (addresses.every(a => members.has(a.toLowerCase()))) {
+        return group;
+      }
+    } catch { /* skip this group */ }
+  }
+
+  return null;
+}
+
 // ── Session group assignment (localStorage) ───────────────────────────────────
 
 const SESSION_GROUP_KEY = 'circles-session-group';
@@ -580,23 +618,23 @@ function deriveAddresses(keys: KeyEntry[]): string[] {
     .filter((a): a is string => a !== null);
 }
 
+const TRUST_BATCH_SIZE   = 30;
+const UNTRUST_BATCH_SIZE = 30;
+
 async function trustAddressesInGroup(groupAddress: string, addresses: string[], ownerSafe?: string): Promise<void> {
   if (!addresses.length) return;
   const existing = await fetchGroupMembers(groupAddress);
   const toTrust  = addresses.filter(a => !existing.has(a.toLowerCase()));
   if (!toTrust.length) return;
 
-  const txs: Array<{ to: string; data: string; value: string }> = [];
-  const BATCH = 30;
-  for (let i = 0; i < toTrust.length; i += BATCH) {
-    const chunk = toTrust.slice(i, i + BATCH) as Address[];
-    txs.push({
+  for (let i = 0; i < toTrust.length; i += TRUST_BATCH_SIZE) {
+    const chunk = toTrust.slice(i, i + TRUST_BATCH_SIZE) as Address[];
+    await sendGroupTxs(ownerSafe, [{
       to:    groupAddress,
       data:  encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, MAX_UINT96] }),
       value: '0',
-    });
+    }]);
   }
-  await sendGroupTxs(ownerSafe, txs);
 }
 
 async function untrustAddressesInGroup(groupAddress: string, addresses: string[], ownerSafe?: string): Promise<void> {
@@ -605,17 +643,14 @@ async function untrustAddressesInGroup(groupAddress: string, addresses: string[]
   const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
   if (!toUntrust.length) return;
 
-  const txs: Array<{ to: string; data: string; value: string }> = [];
-  const BATCH = 30;
-  for (let i = 0; i < toUntrust.length; i += BATCH) {
-    const chunk = toUntrust.slice(i, i + BATCH) as Address[];
-    txs.push({
+  for (let i = 0; i < toUntrust.length; i += UNTRUST_BATCH_SIZE) {
+    const chunk = toUntrust.slice(i, i + UNTRUST_BATCH_SIZE) as Address[];
+    await sendGroupTxs(ownerSafe, [{
       to:    groupAddress,
       data:  encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }),
       value: '0',
-    });
+    }]);
   }
-  await sendGroupTxs(ownerSafe, txs);
 }
 
 // ── Group picker modal ────────────────────────────────────────────────────────
@@ -692,33 +727,13 @@ async function selectSessionGroup(sessionId: string, newGroup: GroupEntry): Prom
 
   try {
     if (oldGroup && addresses.length) {
-      showResult(result, 'pending', `Untrusting from ${escapeHtml(oldGroup.name || oldGroup.group)}…`);
-      const existing  = await fetchGroupMembers(oldGroup.group);
-      const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
-      if (toUntrust.length) {
-        const txs: Array<{ to: string; data: string; value: string }> = [];
-        const BATCH = 30;
-        for (let i = 0; i < toUntrust.length; i += BATCH) {
-          const chunk = toUntrust.slice(i, i + BATCH) as Address[];
-          txs.push({ to: oldGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }), value: '0' });
-        }
-        await sendGroupTxs(oldGroup.ownerSafe, txs);
-      }
+      showResult(result, 'pending', `Unassigning invitations from group ${escapeHtml(oldGroup.name || oldGroup.group)}…`);
+      await untrustAddressesInGroup(oldGroup.group, addresses, oldGroup.ownerSafe);
     }
 
     if (addresses.length) {
       showResult(result, 'pending', `Trusting in ${escapeHtml(newGroup.name || newGroup.group)}…`);
-      const existing = await fetchGroupMembers(newGroup.group);
-      const toTrust  = addresses.filter(a => !existing.has(a.toLowerCase()));
-      if (toTrust.length) {
-        const txs: Array<{ to: string; data: string; value: string }> = [];
-        const BATCH = 30;
-        for (let i = 0; i < toTrust.length; i += BATCH) {
-          const chunk = toTrust.slice(i, i + BATCH) as Address[];
-          txs.push({ to: newGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, MAX_UINT96] }), value: '0' });
-        }
-        await sendGroupTxs(newGroup._ownerSafe, txs);
-      }
+      await trustAddressesInGroup(newGroup.group, addresses, newGroup._ownerSafe);
     }
 
     setSessionGroup(sessionId, {
@@ -748,18 +763,8 @@ async function removeSessionGroup(sessionId: string, fromModal = false): Promise
     const addresses = deriveAddresses(keys);
 
     if (addresses.length) {
-      showResult(result, 'pending', `Untrusting from ${escapeHtml(oldGroup.name || oldGroup.group)}…`);
-      const existing  = await fetchGroupMembers(oldGroup.group);
-      const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
-      if (toUntrust.length) {
-        const txs: Array<{ to: string; data: string; value: string }> = [];
-        const BATCH = 30;
-        for (let i = 0; i < toUntrust.length; i += BATCH) {
-          const chunk = toUntrust.slice(i, i + BATCH) as Address[];
-          txs.push({ to: oldGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }), value: '0' });
-        }
-        await sendGroupTxs(oldGroup.ownerSafe, txs);
-      }
+      showResult(result, 'pending', `Unassigning invitations from group ${escapeHtml(oldGroup.name || oldGroup.group)}…`);
+      await untrustAddressesInGroup(oldGroup.group, addresses, oldGroup.ownerSafe);
     }
 
     setSessionGroup(sessionId, null);
@@ -985,7 +990,7 @@ async function doAssignToSession(sessionId: string, _sessionLabel: string): Prom
 
     const targetGroup = getSessionGroup(sessionId);
     if (targetGroup) {
-      showResult(result, 'pending', `Trusting in group ${escapeHtml(targetGroup.name)}…`);
+      showResult(result, 'pending', `Assigning invitations to group ${escapeHtml(targetGroup.name)}…`);
       const addresses = keys.map(pk => { try { return deriveAccountAddress(pk); } catch { return null; } }).filter((a): a is string => a !== null);
       if (addresses.length) await trustAddressesInGroup(targetGroup.group, addresses, targetGroup.ownerSafe);
     }
@@ -1333,9 +1338,26 @@ function openSession(session: Session): void {
   clearAddKeysPanel();
   renderGroupAssignRow(session.id);
   clearResult(document.getElementById('generateResult')!);
+  document.getElementById('deleteConfirmRow')!.style.display = 'none';
   show('view-detail');
   loadKeys(true);
   loadQuota();
+
+  // If no group in localStorage, try to detect it from on-chain membership
+  if (!getSessionGroup(session.id)) {
+    detectSessionGroup(session.id).then(detected => {
+      // Only apply if still viewing the same session and still no localStorage entry
+      if (currentSession?.id === session.id && !getSessionGroup(session.id) && detected) {
+        setSessionGroup(session.id, {
+          group:     detected.group,
+          name:      detected.name || detected.group,
+          role:      detected._role,
+          ownerSafe: detected._ownerSafe,
+        });
+        renderGroupAssignRow(session.id);
+      }
+    }).catch(() => { /* best-effort */ });
+  }
 }
 
 function renderSessionDetail(s: Session): void {
@@ -1534,6 +1556,78 @@ document.getElementById('pauseBtn')!.addEventListener('click', async () => {
   }
 
   btn.disabled = false;
+});
+
+document.getElementById('deleteSessionBtn')!.addEventListener('click', () => {
+  document.getElementById('deleteConfirmRow')!.style.display = 'flex';
+});
+
+document.getElementById('cancelDeleteBtn')!.addEventListener('click', () => {
+  document.getElementById('deleteConfirmRow')!.style.display = 'none';
+});
+
+document.getElementById('confirmDeleteBtn')!.addEventListener('click', async () => {
+  if (!currentSession) return;
+  const confirmBtn = document.getElementById('confirmDeleteBtn') as HTMLButtonElement;
+  const cancelBtn  = document.getElementById('cancelDeleteBtn') as HTMLButtonElement;
+  confirmBtn.disabled = true;
+  cancelBtn.disabled  = true;
+
+  const span = document.getElementById('deleteConfirmRow')!.querySelector('span')!;
+
+  try {
+    const sessionId = currentSession.id;
+
+    // Fetch all unclaimed keys from this session before deleting
+    span.textContent = 'Fetching unclaimed keys…';
+    const allKeys = await loadAllSessionKeys(sessionId);
+    const unclaimed = allKeys.filter(k => k.privateKey && k.status !== 'claimed');
+
+    // Remove unclaimed keys from assigned group (if any)
+    const sessionGroup = getSessionGroup(sessionId);
+    if (sessionGroup && unclaimed.length > 0) {
+      span.textContent = `Removing ${unclaimed.length} key(s) from group…`;
+      const addresses = deriveAddresses(unclaimed);
+      if (addresses.length > 0) {
+        await untrustAddressesInGroup(sessionGroup.group, addresses, sessionGroup.ownerSafe);
+      }
+    }
+    // Clear the group assignment from localStorage
+    if (sessionGroup) {
+      setSessionGroup(sessionId, null);
+    }
+
+    // Best-effort: migrate unclaimed keys back to personal pool (ignore failures)
+    if (unclaimed.length > 0) {
+      span.textContent = `Migrating ${unclaimed.length} key(s) to personal pool…`;
+      const privateKeys = unclaimed.map(k => k.privateKey!);
+      for (let i = 0; i < privateKeys.length; i += 200) {
+        const chunkKeys   = privateKeys.slice(i, i + 200);
+        const invitations = chunkKeys.map(pk => ({ privateKey: pk, inviter: connectedAddress }));
+        try {
+          await fetch(`${REFERRALS_BASE}/store-batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify({ invitations }),
+          });
+        } catch { /* best-effort, ignore */ }
+      }
+    }
+
+    span.textContent = 'Deleting session…';
+    await distributions.deleteSession(sessionId);
+    document.getElementById('deleteConfirmRow')!.style.display = 'none';
+    currentSession = null;
+    const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
+    currentSessions = data.sessions || [];
+    renderSessions(currentSessions);
+    show('view-sessions');
+    setSessionsTabActive();
+  } catch (e) {
+    span.textContent = 'Failed: ' + (e as Error).message;
+    confirmBtn.disabled = false;
+    cancelBtn.disabled  = false;
+  }
 });
 
 document.getElementById('addKeysBtn')!.addEventListener('click', () => {
