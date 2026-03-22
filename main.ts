@@ -2,8 +2,9 @@ import { onWalletChange, signMessage, sendTransactions } from '@aboutcircles/min
 import { Distributions, Referrals } from '@aboutcircles/sdk-invitations';
 import { CirclesRpc, PagedQuery } from '@aboutcircles/sdk-rpc';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
-import { encodeFunctionData, encodeAbiParameters, keccak256, encodePacked, createPublicClient, http, type Hex, type Address } from 'viem';
+import { encodeFunctionData, encodeAbiParameters, keccak256, encodePacked, createPublicClient, http, getAddress, isAddress, zeroAddress, type Hex, type Address } from 'viem';
 import { gnosis } from 'viem/chains';
+import { getSafeSingletonDeployment } from '@safe-global/safe-deployments';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -40,12 +41,15 @@ interface GroupEntry {
   service?: string;
   symbol?: string;
   _role: 'owner' | 'service';
+  /** Set when the user acts on behalf of this group via a Safe multisig (inherited ownership). */
+  _ownerSafe?: string;
 }
 
 interface SessionGroupRecord {
   group: string;
   name: string;
   role: string;
+  ownerSafe?: string;
 }
 
 interface Challenge {
@@ -54,6 +58,17 @@ interface Challenge {
 }
 
 type ResultType = 'success' | 'error' | 'pending';
+
+// ── Safe constants ────────────────────────────────────────────────────────────
+
+const SAFE_VERSION            = '1.4.1';
+const SAFE_TX_SERVICE_URL     = 'https://api.safe.global/tx-service/gno';
+const SAFE_MULTICALL_BATCH_SIZE = 40;
+
+const safeSingletonDeployment = getSafeSingletonDeployment({
+  network: String(gnosis.id),
+  version: SAFE_VERSION,
+});
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -257,13 +272,152 @@ function copySessionLink(sessionId: string, slug: string, btn: HTMLButtonElement
   });
 }
 
+// ── Safe owner helpers ────────────────────────────────────────────────────────
+
+const sessionOwnerSafesByUser = new Map<string, string[]>();
+
+function getSessionOwnerSafes(ownerAddress: string): string[] {
+  return sessionOwnerSafesByUser.get(ownerAddress.toLowerCase()) ?? [];
+}
+
+function setSessionOwnerSafes(ownerAddress: string, safeAddresses: string[]): void {
+  sessionOwnerSafesByUser.set(ownerAddress.toLowerCase(), safeAddresses);
+}
+
+function normalizeAddressList(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values ?? []) {
+    if (!value || typeof value !== 'string' || !isAddress(value)) continue;
+    const normalized = getAddress(value);
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+async function fetchOwnerSafeCandidates(ownerAddress: string): Promise<string[]> {
+  try {
+    const response = await fetch(`${SAFE_TX_SERVICE_URL}/api/v1/owners/${ownerAddress}/safes/`);
+    if (!response.ok) return [];
+    const data = await response.json() as { safes?: unknown[] };
+    return normalizeAddressList(data?.safes ?? []);
+  } catch {
+    return [];
+  }
+}
+
+async function getVerifiedOwnerSafes(safeAddresses: string[], ownerAddress: string): Promise<string[]> {
+  const safeAbi = safeSingletonDeployment?.abi;
+  if (!safeAbi || !safeAddresses.length) return [];
+
+  const normalized = normalizeAddressList(safeAddresses);
+  const verified: string[] = [];
+
+  for (let i = 0; i < normalized.length; i += SAFE_MULTICALL_BATCH_SIZE) {
+    const batch = normalized.slice(i, i + SAFE_MULTICALL_BATCH_SIZE);
+    const contracts = batch.flatMap((safeAddress) => [
+      { address: safeAddress as Address, abi: safeAbi, functionName: 'getOwners' as const },
+      { address: safeAddress as Address, abi: safeAbi, functionName: 'getThreshold' as const },
+    ]);
+
+    try {
+      const results = await publicClient.multicall({ contracts, allowFailure: true });
+      batch.forEach((safeAddress, batchIndex) => {
+        const ownersResult    = results[batchIndex * 2];
+        const thresholdResult = results[batchIndex * 2 + 1];
+        if (ownersResult?.status !== 'success' || thresholdResult?.status !== 'success') return;
+        const owners    = ownersResult.result as string[];
+        const threshold = thresholdResult.result as bigint;
+        if (
+          Array.isArray(owners) &&
+          owners.some(o => o.toLowerCase() === ownerAddress.toLowerCase()) &&
+          BigInt(threshold) >= 1n
+        ) {
+          verified.push(safeAddress);
+        }
+      });
+    } catch { /* skip batch on error */ }
+  }
+
+  return verified;
+}
+
+/** Build a prevalidated Safe signature for the given owner address. */
+function buildPrevalidatedSignature(ownerAddress: string): Hex {
+  const ownerPadded = ownerAddress.toLowerCase().replace('0x', '').padStart(64, '0');
+  return `0x${ownerPadded}${'0'.repeat(64)}01` as Hex;
+}
+
+/**
+ * Wrap a set of transactions so they are sent through a Safe multisig
+ * that is owned by `ownerAddress`. Returns the wrapped tx array ready
+ * to pass to `sendTransactions`.
+ */
+function wrapTxsForSafe(
+  ownerAddress: string,
+  safeAddress: string,
+  txs: Array<{ to: string; data: string; value: string }>,
+): Array<{ to: string; data: string; value: string }> {
+  const safeAbi = safeSingletonDeployment?.abi;
+  if (!safeAbi) throw new Error('Safe singleton ABI is unavailable.');
+
+  const signature = buildPrevalidatedSignature(ownerAddress);
+  return txs.map(tx => ({
+    to: safeAddress,
+    value: '0',
+    data: encodeFunctionData({
+      abi: safeAbi,
+      functionName: 'execTransaction',
+      args: [
+        tx.to as Address,
+        tx.value ? BigInt(tx.value) : 0n,
+        tx.data as Hex || '0x',
+        0,
+        0n,
+        0n,
+        0n,
+        zeroAddress,
+        zeroAddress,
+        signature,
+      ],
+    }),
+  }));
+}
+
+/**
+ * Send group transactions, automatically routing through a Safe when the
+ * group is owned by a Safe that the connected user is a signer on.
+ *
+ * @param ownerSafe  - the Safe that owns the group (undefined = direct ownership)
+ * @param txs        - raw transactions targeting the group contract
+ */
+async function sendGroupTxs(
+  ownerSafe: string | undefined,
+  txs: Array<{ to: string; data: string; value: string }>,
+): Promise<void> {
+  if (!txs.length) return;
+  const finalTxs = ownerSafe
+    ? wrapTxsForSafe(connectedAddress!, ownerSafe, txs)
+    : txs;
+  await sendTransactions(finalTxs);
+}
+
 // ── Group trust ───────────────────────────────────────────────────────────────
+
+async function fetchGroupsByOwners(ownerAddresses: string[]): Promise<GroupEntry[]> {
+  if (!ownerAddresses.length) return [];
+  return (await rpc.group.findGroups(200, { ownerIn: ownerAddresses })) as GroupEntry[];
+}
 
 async function fetchControlledGroups(address: string): Promise<GroupEntry[]> {
   const lower = address.toLowerCase();
 
-  const byOwner = await rpc.group.findGroups(200, { ownerIn: [address] });
+  // 1. Direct ownership
+  const byOwner = await fetchGroupsByOwners([address]);
 
+  // 2. Service role (direct)
   const serviceQuery = new PagedQuery(rpc.client, {
     namespace: 'V_CrcV2',
     table: 'Groups',
@@ -286,8 +440,30 @@ async function fetchControlledGroups(address: string): Promise<GroupEntry[]> {
     byService.push(...rows);
   }
 
+  // 3. Inherited ownership via Safe multisigs where user is a signer
+  const cachedSafes  = getSessionOwnerSafes(address);
+  const serviceSafes = await fetchOwnerSafeCandidates(address);
+  const allSafes     = normalizeAddressList([...serviceSafes, ...cachedSafes]);
+
+  let safeGroups: GroupEntry[] = [];
+  let verifiedSafes: string[]  = [];
+  if (allSafes.length) {
+    verifiedSafes = await getVerifiedOwnerSafes(allSafes, address);
+    setSessionOwnerSafes(address, verifiedSafes);
+    if (verifiedSafes.length) {
+      const rawSafeGroups = await fetchGroupsByOwners(verifiedSafes);
+      // Tag each group with the Safe that owns it so we can route txs correctly
+      safeGroups = rawSafeGroups.map(g => ({
+        ...g,
+        _role: 'owner' as const,
+        _ownerSafe: verifiedSafes.find(s => s.toLowerCase() === (g.owner || '').toLowerCase()),
+      }));
+    }
+  }
+
+  // Merge: direct first, then service, then safe-backed (de-duplicate by group address)
   const seen = new Set<string>();
-  const all: GroupEntry[]  = [];
+  const all: GroupEntry[] = [];
   for (const g of [...(byOwner as GroupEntry[]), ...byService]) {
     const addr = (g.group || '').toLowerCase();
     if (!seen.has(addr)) {
@@ -295,6 +471,13 @@ async function fetchControlledGroups(address: string): Promise<GroupEntry[]> {
       const isOwner   = (g.owner   || '').toLowerCase() === lower;
       const isService = (g.service || '').toLowerCase() === lower;
       all.push({ ...g, _role: isOwner ? 'owner' : isService ? 'service' : 'owner' });
+    }
+  }
+  for (const g of safeGroups) {
+    const addr = (g.group || '').toLowerCase();
+    if (!seen.has(addr)) {
+      seen.add(addr);
+      all.push(g);
     }
   }
   return all;
@@ -397,11 +580,11 @@ function deriveAddresses(keys: KeyEntry[]): string[] {
     .filter((a): a is string => a !== null);
 }
 
-async function trustAddressesInGroup(groupAddress: string, addresses: string[]): Promise<string[]> {
-  if (!addresses.length) return [];
+async function trustAddressesInGroup(groupAddress: string, addresses: string[], ownerSafe?: string): Promise<void> {
+  if (!addresses.length) return;
   const existing = await fetchGroupMembers(groupAddress);
   const toTrust  = addresses.filter(a => !existing.has(a.toLowerCase()));
-  if (!toTrust.length) return [];
+  if (!toTrust.length) return;
 
   const txs: Array<{ to: string; data: string; value: string }> = [];
   const BATCH = 30;
@@ -413,15 +596,14 @@ async function trustAddressesInGroup(groupAddress: string, addresses: string[]):
       value: '0',
     });
   }
-  const hashes = await sendTransactions(txs);
-  return hashes as string[];
+  await sendGroupTxs(ownerSafe, txs);
 }
 
-async function untrustAddressesInGroup(groupAddress: string, addresses: string[]): Promise<string[]> {
-  if (!addresses.length) return [];
+async function untrustAddressesInGroup(groupAddress: string, addresses: string[], ownerSafe?: string): Promise<void> {
+  if (!addresses.length) return;
   const existing  = await fetchGroupMembers(groupAddress);
   const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
-  if (!toUntrust.length) return [];
+  if (!toUntrust.length) return;
 
   const txs: Array<{ to: string; data: string; value: string }> = [];
   const BATCH = 30;
@@ -433,8 +615,7 @@ async function untrustAddressesInGroup(groupAddress: string, addresses: string[]
       value: '0',
     });
   }
-  const hashes = await sendTransactions(txs);
-  return hashes as string[];
+  await sendGroupTxs(ownerSafe, txs);
 }
 
 // ── Group picker modal ────────────────────────────────────────────────────────
@@ -469,9 +650,13 @@ async function openGroupPickModal(): Promise<void> {
 
   list.innerHTML = controlledGroups.map((g, i) => {
     const isSelected = assigned && assigned.group.toLowerCase() === g.group.toLowerCase();
+    const viaSafe    = g._ownerSafe
+      ? `<span class="group-pick-safe" title="Acting via Safe ${g._ownerSafe}">via Safe ${shortAddr(g._ownerSafe)}</span>`
+      : '';
     return `
       <div class="group-pick-item${isSelected ? ' selected' : ''}" data-group-idx="${i}">
         <span class="group-pick-name">${escapeHtml(g.name || g.group)}</span>
+        ${viaSafe}
         <span class="group-pick-role">${escapeHtml(g._role)}</span>
       </div>
     `;
@@ -504,40 +689,44 @@ async function selectSessionGroup(sessionId: string, newGroup: GroupEntry): Prom
   if (!keys) return;
 
   const addresses = deriveAddresses(keys);
-  const txs: Array<{ to: string; data: string; value: string }> = [];
-
-  if (oldGroup && addresses.length) {
-    showResult(result, 'pending', `Untrusting from ${escapeHtml(oldGroup.name || oldGroup.group)}…`);
-    const existing  = await fetchGroupMembers(oldGroup.group);
-    const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
-    if (toUntrust.length) {
-      const BATCH = 30;
-      for (let i = 0; i < toUntrust.length; i += BATCH) {
-        const chunk = toUntrust.slice(i, i + BATCH) as Address[];
-        txs.push({ to: oldGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }), value: '0' });
-      }
-    }
-  }
-
-  if (addresses.length) {
-    showResult(result, 'pending', `Trusting in ${escapeHtml(newGroup.name || newGroup.group)}…`);
-    const existing = await fetchGroupMembers(newGroup.group);
-    const toTrust  = addresses.filter(a => !existing.has(a.toLowerCase()));
-    if (toTrust.length) {
-      const BATCH = 30;
-      for (let i = 0; i < toTrust.length; i += BATCH) {
-        const chunk = toTrust.slice(i, i + BATCH) as Address[];
-        txs.push({ to: newGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, MAX_UINT96] }), value: '0' });
-      }
-    }
-  }
 
   try {
-    if (txs.length) {
-      showResult(result, 'pending', `Sending ${txs.length} transaction(s)…`);
-      await sendTransactions(txs);
+    if (oldGroup && addresses.length) {
+      showResult(result, 'pending', `Untrusting from ${escapeHtml(oldGroup.name || oldGroup.group)}…`);
+      const existing  = await fetchGroupMembers(oldGroup.group);
+      const toUntrust = addresses.filter(a => existing.has(a.toLowerCase()));
+      if (toUntrust.length) {
+        const txs: Array<{ to: string; data: string; value: string }> = [];
+        const BATCH = 30;
+        for (let i = 0; i < toUntrust.length; i += BATCH) {
+          const chunk = toUntrust.slice(i, i + BATCH) as Address[];
+          txs.push({ to: oldGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }), value: '0' });
+        }
+        await sendGroupTxs(oldGroup.ownerSafe, txs);
+      }
     }
-    setSessionGroup(sessionId, { group: newGroup.group, name: newGroup.name || newGroup.group, role: newGroup._role });
+
+    if (addresses.length) {
+      showResult(result, 'pending', `Trusting in ${escapeHtml(newGroup.name || newGroup.group)}…`);
+      const existing = await fetchGroupMembers(newGroup.group);
+      const toTrust  = addresses.filter(a => !existing.has(a.toLowerCase()));
+      if (toTrust.length) {
+        const txs: Array<{ to: string; data: string; value: string }> = [];
+        const BATCH = 30;
+        for (let i = 0; i < toTrust.length; i += BATCH) {
+          const chunk = toTrust.slice(i, i + BATCH) as Address[];
+          txs.push({ to: newGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, MAX_UINT96] }), value: '0' });
+        }
+        await sendGroupTxs(newGroup._ownerSafe, txs);
+      }
+    }
+
+    setSessionGroup(sessionId, {
+      group: newGroup.group,
+      name: newGroup.name || newGroup.group,
+      role: newGroup._role,
+      ownerSafe: newGroup._ownerSafe,
+    });
     document.getElementById('groupPickModal')!.classList.remove('show');
     renderGroupAssignRow(sessionId);
   } catch (e) {
@@ -569,7 +758,7 @@ async function removeSessionGroup(sessionId: string, fromModal = false): Promise
           const chunk = toUntrust.slice(i, i + BATCH) as Address[];
           txs.push({ to: oldGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [chunk, 0n] }), value: '0' });
         }
-        await sendTransactions(txs);
+        await sendGroupTxs(oldGroup.ownerSafe, txs);
       }
     }
 
@@ -798,7 +987,7 @@ async function doAssignToSession(sessionId: string, _sessionLabel: string): Prom
     if (targetGroup) {
       showResult(result, 'pending', `Trusting in group ${escapeHtml(targetGroup.name)}…`);
       const addresses = keys.map(pk => { try { return deriveAccountAddress(pk); } catch { return null; } }).filter((a): a is string => a !== null);
-      if (addresses.length) await trustAddressesInGroup(targetGroup.group, addresses);
+      if (addresses.length) await trustAddressesInGroup(targetGroup.group, addresses, targetGroup.ownerSafe);
     }
 
     assignTargetKeys = [];
@@ -1293,7 +1482,7 @@ async function generateInvitations(): Promise<void> {
     if (sessionGroup) {
       showResult(result, 'pending', `Trusting in group ${escapeHtml(sessionGroup.name)}…`);
       const addresses = keypairs.map(k => deriveAccountAddress(k.privateKey)).filter(Boolean);
-      if (addresses.length) await trustAddressesInGroup(sessionGroup.group, addresses);
+      if (addresses.length) await trustAddressesInGroup(sessionGroup.group, addresses, sessionGroup.ownerSafe);
     }
 
     await loadQuota();
@@ -1478,7 +1667,7 @@ async function loadKeys(reset = false): Promise<void> {
             if (sessionGroup && k.privateKey) {
               try {
                 const addr = deriveAccountAddress(k.privateKey);
-                await untrustAddressesInGroup(sessionGroup.group, [addr]);
+                await untrustAddressesInGroup(sessionGroup.group, [addr], sessionGroup.ownerSafe);
               } catch { /* non-fatal */ }
             }
 
@@ -1581,22 +1770,25 @@ async function doReassign(targetSessionId: string, _targetSessionLabel: string):
     try { accountAddr = deriveAccountAddress(reassignKey.privateKey!); } catch { /* ignore */ }
 
     if (accountAddr) {
-      const txs: Array<{ to: string; data: string; value: string }> = [];
       if (sourceGroup) {
         const existing = await fetchGroupMembers(sourceGroup.group);
         if (existing.has(accountAddr.toLowerCase())) {
-          txs.push({ to: sourceGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [[accountAddr as Address], 0n] }), value: '0' });
+          showResult(result, 'pending', 'Removing from old group…');
+          await sendGroupTxs(
+            sourceGroup.ownerSafe,
+            [{ to: sourceGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [[accountAddr as Address], 0n] }), value: '0' }],
+          );
         }
       }
       if (targetGroup) {
         const existing = await fetchGroupMembers(targetGroup.group);
         if (!existing.has(accountAddr.toLowerCase())) {
-          txs.push({ to: targetGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [[accountAddr as Address], MAX_UINT96] }), value: '0' });
+          showResult(result, 'pending', 'Adding to new group…');
+          await sendGroupTxs(
+            targetGroup.ownerSafe,
+            [{ to: targetGroup.group, data: encodeFunctionData({ abi: BASE_GROUP_ABI, functionName: 'trustBatchWithConditions', args: [[accountAddr as Address], MAX_UINT96] }), value: '0' }],
+          );
         }
-      }
-      if (txs.length) {
-        showResult(result, 'pending', 'Updating group membership…');
-        await sendTransactions(txs);
       }
     }
 

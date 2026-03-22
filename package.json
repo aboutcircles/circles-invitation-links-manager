@@ -18,6 +18,7 @@
     "@aboutcircles/sdk-abis": "^0.1.25",
     "@aboutcircles/sdk-invitations": "^0.1.25",
     "@aboutcircles/sdk-rpc": "^0.1.25",
+    "@safe-global/safe-deployments": "^1.37.53",
     "viem": "^2.46.3"
   }
 }
