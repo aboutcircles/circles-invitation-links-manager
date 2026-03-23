@@ -1,8 +1,11 @@
+import { Buffer } from 'buffer';
+if (typeof globalThis.Buffer === 'undefined') globalThis.Buffer = Buffer;
+
 import { onWalletChange, signMessage, sendTransactions } from '@aboutcircles/miniapp-sdk';
-import { Distributions, Referrals } from '@aboutcircles/sdk-invitations';
+import { Distributions, Referrals, InviteFarm } from '@aboutcircles/sdk-invitations';
 import { CirclesRpc, PagedQuery } from '@aboutcircles/sdk-rpc';
-import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
-import { encodeFunctionData, encodeAbiParameters, keccak256, encodePacked, createPublicClient, http, getAddress, isAddress, zeroAddress, type Hex, type Address } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { encodeFunctionData, keccak256, encodePacked, createPublicClient, http, getAddress, isAddress, zeroAddress, type Hex, type Address } from 'viem';
 import { gnosis } from 'viem/chains';
 import { getSafeSingletonDeployment } from '@safe-global/safe-deployments';
 
@@ -125,48 +128,33 @@ const INVITATION_FARM    = '0xd28b7C4f148B1F1E190840A1f7A796C5525D8902' as Addre
 const INVITATION_MODULE  = '0x00738aca013B7B2e6cfE1690F0021C3182Fa40B5' as Address;
 const REFERRALS_MODULE   = '0x12105a9b291af2abb0591001155a75949b062ce5' as Address;
 const HUB                = '0xc12C1E50ABB450d6205Ea2C3Fa861b3B834d13e8' as Address;
-const INVITATION_FEE     = 96n * 10n ** 18n;
-
-const INVITATION_FARM_ABI = [
-  {
-    type: 'function',
-    name: 'inviterQuota',
-    inputs: [{ name: '', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'claimInvites',
-    inputs: [{ name: 'numberOfInvites', type: 'uint256' }],
-    outputs: [{ name: 'ids', type: 'uint256[]' }],
-    stateMutability: 'nonpayable',
-  },
-] as const;
-
-const HUB_BATCH_TRANSFER_ABI = [{
+const INVITATION_FARM_ABI = [{
   type: 'function',
-  name: 'safeBatchTransferFrom',
-  inputs: [
-    { name: 'from',   type: 'address'   },
-    { name: 'to',     type: 'address'   },
-    { name: 'ids',    type: 'uint256[]' },
-    { name: 'values', type: 'uint256[]' },
-    { name: 'data',   type: 'bytes'     },
-  ],
-  outputs: [],
-  stateMutability: 'nonpayable',
-}] as const;
-
-const REFERRALS_MODULE_ABI = [{
-  type: 'function',
-  name: 'createAccounts',
-  inputs: [{ name: 'signers', type: 'address[]' }],
-  outputs: [{ name: '_accounts', type: 'address[]' }],
-  stateMutability: 'nonpayable',
+  name: 'inviterQuota',
+  inputs: [{ name: '', type: 'address' }],
+  outputs: [{ name: '', type: 'uint256' }],
+  stateMutability: 'view',
 }] as const;
 
 const publicClient = createPublicClient({ chain: gnosis, transport: http('https://rpc.gnosischain.com') });
+
+const inviteFarm = new InviteFarm({
+  circlesRpcUrl:            'https://rpc.circlesubi.network/',
+  pathfinderUrl:            'https://pathfinder.aboutcircles.com',
+  profileServiceUrl:        'https://profile.aboutcircles.com',
+  referralsServiceUrl:      REFERRALS_BASE,
+  v1HubAddress:             '0x29b9a7fBb8995b2423a71cC17cf9810798F6C543',
+  v2HubAddress:             HUB,
+  nameRegistryAddress:      '0xA27566fD89162cC3D40Cb59c87AAaA49B85F3474',
+  baseGroupMintPolicy:      '0x79Cbc9C7077dF161b92a745345A6Ade3fC626A60',
+  standardTreasury:         '0x08F90aB73A515308f03A718257ff9887ED330C6e',
+  coreMembersGroupDeployer: '0xD0B5Bd9962197BEaC4cbA24244ec3587f19Bd06d',
+  baseGroupFactoryAddress:  '0xD0B5Bd9962197BEaC4cbA24244ec3587f19Bd06d',
+  liftERC20Address:         '0x5F99a795dD2743C36D63511f0D4bc667e6d3cDB5',
+  invitationFarmAddress:    INVITATION_FARM,
+  referralsModuleAddress:   REFERRALS_MODULE,
+  invitationModuleAddress:  INVITATION_MODULE,
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1446,56 +1434,21 @@ async function generateInvitations(): Promise<void> {
   showResult(result, 'pending', 'Generating keypairs…');
 
   try {
-    const keypairs = Array.from({ length: COUNT }, () => {
-      const privateKey    = generatePrivateKey();
-      const signerAddress = privateKeyToAccount(privateKey).address;
-      return { privateKey, signerAddress };
-    });
-
-    const signers = keypairs.map(k => k.signerAddress);
-
-    showResult(result, 'pending', 'Fetching invitation token IDs…');
-    const botTokenIds = await publicClient.readContract({
-      address: INVITATION_FARM,
-      abi: INVITATION_FARM_ABI,
-      functionName: 'claimInvites',
-      args: [BigInt(COUNT)],
-      account: connectedAddress as Address,
-    });
-    if (!botTokenIds || botTokenIds.length !== COUNT) {
-      throw new Error(`Expected ${COUNT} token IDs but got ${botTokenIds?.length ?? 0}`);
-    }
-
-    const createAccountsCall = encodeFunctionData({
-      abi: REFERRALS_MODULE_ABI,
-      functionName: 'createAccounts',
-      args: [signers as Address[]],
-    });
-    const genericCallData = encodeAbiParameters(
-      [{ type: 'address' }, { type: 'bytes' }],
-      [REFERRALS_MODULE, createAccountsCall]
+    showResult(result, 'pending', 'Building invitation transactions…');
+    const { referrals, transactions } = await inviteFarm.generateReferrals(
+      connectedAddress as Address,
+      COUNT,
     );
 
-    const claimData = encodeFunctionData({
-      abi: INVITATION_FARM_ABI,
-      functionName: 'claimInvites',
-      args: [BigInt(COUNT)],
-    });
-    const values       = botTokenIds.map(() => INVITATION_FEE);
-    const transferData = encodeFunctionData({
-      abi: HUB_BATCH_TRANSFER_ABI,
-      functionName: 'safeBatchTransferFrom',
-      args: [connectedAddress as Address, INVITATION_MODULE, [...botTokenIds], values, genericCallData],
-    });
-
     showResult(result, 'pending', 'Waiting for wallet confirmation…');
-    await sendTransactions([
-      { to: INVITATION_FARM, data: claimData,    value: '0' },
-      { to: HUB,             data: transferData, value: '0' },
-    ]);
+    await sendTransactions(transactions.map(tx => ({
+      to:    tx.to    as string,
+      data:  tx.data  as string,
+      value: tx.value ? String(tx.value) : '0',
+    })));
 
     showResult(result, 'pending', 'Adding to session…');
-    const privateKeys = keypairs.map(k => k.privateKey);
+    const privateKeys = referrals.map(r => r.secret);
     for (let i = 0; i < privateKeys.length; i += 100) {
       await distributions.addKeys(currentSession!.id, privateKeys.slice(i, i + 100));
     }
@@ -1503,7 +1456,7 @@ async function generateInvitations(): Promise<void> {
     const sessionGroup = getSessionGroup(currentSession!.id);
     if (sessionGroup) {
       showResult(result, 'pending', `Trusting in group ${escapeHtml(sessionGroup.name)}…`);
-      const addresses = keypairs.map(k => deriveAccountAddress(k.privateKey)).filter(Boolean);
+      const addresses = referrals.map(r => deriveAccountAddress(r.secret)).filter(Boolean);
       if (addresses.length) await trustAddressesInGroup(sessionGroup.group, addresses, sessionGroup.ownerSafe);
     }
 
