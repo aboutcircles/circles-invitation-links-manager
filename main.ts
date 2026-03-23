@@ -83,7 +83,6 @@ const SESSION_BASE   = 'https://circles.gnosis.io/invitation';
 
 let connectedAddress: string | null = null;
 let authToken:        string | null = null;
-let currentChallenge: Challenge | null = null;  // eslint-disable-line @typescript-eslint/no-unused-vars
 let currentSession:   Session | null = null;
 let keysOffset        = 0;
 const KEYS_PAGE       = 50;
@@ -92,7 +91,6 @@ let selectedExpiry    = 0;  // days; 0 = no expiry
 // My Invites pagination
 let myInvitesOffset  = 0;
 const MY_INVITES_PAGE = 50;
-let myInvitesTotal   = 0;   // eslint-disable-line @typescript-eslint/no-unused-vars
 let myInvitesClaimed: Referral[] = [];
 let loadKeysClaimed:  KeyEntry[] = [];
 
@@ -206,6 +204,17 @@ function escapeHtml(str: string | null | undefined): string {
 function escapeAttr(str: string | null | undefined): string {
   if (!str) return '';
   return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function parsePrivateKeys(raw: string): string[] {
+  return raw.split('\n')
+    .map(l => l.trim())
+    .filter(l => /^0x[a-fA-F0-9]{64}$/.test(l));
+}
+
+async function refreshSessions(): Promise<void> {
+  const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
+  currentSessions = data.sessions || [];
 }
 
 // ── Session params (localStorage) ────────────────────────────────────────────
@@ -771,79 +780,85 @@ async function loadMyInvites(reset = false): Promise<void> {
   if (reset) content.innerHTML = '<div class="empty-state">Loading…</div>';
 
   try {
-    const data = await referrals.listMine({
-      limit: MY_INVITES_PAGE,
-      offset: myInvitesOffset,
-    }) as { referrals: Referral[]; total: number };
+    // Fetch all pages iteratively
+    let total = Infinity;
+    while (myInvitesOffset < total) {
+      const data = await referrals.listMine({
+        limit: MY_INVITES_PAGE,
+        offset: myInvitesOffset,
+      }) as { referrals: Referral[]; total: number };
 
-    for (const ref of data.referrals) {
-      if (ref.privateKey) myInvitesKeyMap.set(ref.id, ref.privateKey);
-    }
+      total = data.total;
 
-    myInvitesTotal = data.total;
+      for (const ref of data.referrals) {
+        if (ref.privateKey) myInvitesKeyMap.set(ref.id, ref.privateKey);
+      }
 
-    if (reset) {
-      content.innerHTML = '';
-      selectedRefIds.clear();
-    }
+      if (myInvitesOffset === 0) {
+        if (reset) { content.innerHTML = ''; selectedRefIds.clear(); }
 
-    if (!data.referrals.length && myInvitesOffset === 0) {
-      content.innerHTML = '<div class="empty-state">No invitation codes yet.<br>Add keys above to get started.</div>';
-      updateBulkAssignBar();
-      return;
-    }
+        if (!data.referrals.length) {
+          content.innerHTML = '<div class="empty-state">No invitation codes yet.<br>Add keys above to get started.</div>';
+          updateBulkAssignBar();
+          return;
+        }
+      }
 
-    content.querySelector('.claimed-toggle')?.remove();
-    content.querySelector('.claimed-list')?.remove();
+      content.querySelector('.claimed-toggle')?.remove();
+      content.querySelector('.claimed-list')?.remove();
 
-    const active  = data.referrals.filter(r => r.status !== 'claimed' && !r.sessions.length);
-    const claimed = data.referrals.filter(r => r.status === 'claimed');
-    myInvitesClaimed.push(...claimed);
+      const active  = data.referrals.filter(r => r.status !== 'claimed' && !r.sessions.length);
+      const claimed = data.referrals.filter(r => r.status === 'claimed');
+      myInvitesClaimed.push(...claimed);
 
-    if (active.length && !document.getElementById('selectAllRow')) {
-      const selectAllRow = document.createElement('div');
-      selectAllRow.id = 'selectAllRow';
-      selectAllRow.className = 'invite-row select-all-row';
-      selectAllRow.innerHTML = `
-        <input type="checkbox" id="selectAllChk" class="invite-checkbox">
-        <label for="selectAllChk" style="font-size:12px;color:#6a6c8c;cursor:pointer;">Select all</label>
-        <span id="bulkAssignCount" style="font-size:12px;font-weight:600;color:#3730a3;margin-left:8px;"></span>
-        <button class="btn-sm" id="bulkAssignBtn" style="visibility:hidden;margin-left:auto;">Assign to magic link →</button>
-      `;
-      selectAllRow.querySelector('#selectAllChk')!.addEventListener('change', (e) => {
-        const checked = (e.target as HTMLInputElement).checked;
-        content.querySelectorAll<HTMLInputElement>('.invite-checkbox[data-ref-id]').forEach(chk => {
-          chk.checked = checked;
-          if (checked) selectedRefIds.add(chk.dataset.refId!);
-          else selectedRefIds.delete(chk.dataset.refId!);
+      if (active.length && !document.getElementById('selectAllRow')) {
+        const selectAllRow = document.createElement('div');
+        selectAllRow.id = 'selectAllRow';
+        selectAllRow.className = 'invite-row select-all-row';
+        selectAllRow.innerHTML = `
+          <input type="checkbox" id="selectAllChk" class="invite-checkbox">
+          <label for="selectAllChk" style="font-size:12px;color:#6a6c8c;cursor:pointer;">Select all</label>
+          <span id="bulkAssignCount" style="font-size:12px;font-weight:600;color:#3730a3;margin-left:8px;"></span>
+          <button class="btn-sm" id="bulkAssignBtn" style="visibility:hidden;margin-left:auto;">Assign to magic link →</button>
+        `;
+        selectAllRow.querySelector('#selectAllChk')!.addEventListener('change', (e) => {
+          const checked = (e.target as HTMLInputElement).checked;
+          content.querySelectorAll<HTMLInputElement>('.invite-checkbox[data-ref-id]').forEach(chk => {
+            chk.checked = checked;
+            if (checked) selectedRefIds.add(chk.dataset.refId!);
+            else selectedRefIds.delete(chk.dataset.refId!);
+          });
+          updateBulkAssignBar();
         });
-        updateBulkAssignBar();
-      });
-      content.insertBefore(selectAllRow, content.firstChild);
-    }
+        content.insertBefore(selectAllRow, content.firstChild);
+      }
 
-    for (const ref of active) {
-      const row = document.createElement('div');
-      row.className = 'invite-row';
+      for (const ref of active) {
+        const row = document.createElement('div');
+        row.className = 'invite-row';
 
-      const pillHtml = ref.status === 'confirmed'
-        ? '<span class="pill pill-active">Confirmed</span>'
-        : '';
+        const pillHtml = ref.status === 'confirmed'
+          ? '<span class="pill pill-active">Confirmed</span>'
+          : '';
 
-      row.innerHTML = `
-        <input type="checkbox" class="invite-checkbox" data-ref-id="${escapeAttr(ref.id)}" ${selectedRefIds.has(ref.id) ? 'checked' : ''}>
-        <span class="key-addr">${escapeHtml(keyPreview(ref.privateKey))}</span>
-        ${pillHtml}
-      `;
+        row.innerHTML = `
+          <input type="checkbox" class="invite-checkbox" data-ref-id="${escapeAttr(ref.id)}" ${selectedRefIds.has(ref.id) ? 'checked' : ''}>
+          <span class="key-addr">${escapeHtml(keyPreview(ref.privateKey))}</span>
+          ${pillHtml}
+        `;
 
-      row.querySelector('.invite-checkbox')!.addEventListener('change', (e) => {
-        if ((e.target as HTMLInputElement).checked) selectedRefIds.add(ref.id);
-        else selectedRefIds.delete(ref.id);
-        syncSelectAll();
-        updateBulkAssignBar();
-      });
+        row.querySelector('.invite-checkbox')!.addEventListener('change', (e) => {
+          if ((e.target as HTMLInputElement).checked) selectedRefIds.add(ref.id);
+          else selectedRefIds.delete(ref.id);
+          syncSelectAll();
+          updateBulkAssignBar();
+        });
 
-      content.appendChild(row);
+        content.appendChild(row);
+      }
+
+      myInvitesOffset += data.referrals.length;
+      if (!data.referrals.length) break;  // guard against empty pages
     }
 
     if (myInvitesClaimed.length) {
@@ -879,12 +894,7 @@ async function loadMyInvites(reset = false): Promise<void> {
       content.appendChild(claimedList);
     }
 
-    myInvitesOffset += data.referrals.length;
     updateBulkAssignBar();
-
-    if (myInvitesOffset < data.total) {
-      loadMyInvites(false);
-    }
 
   } catch (e) {
     if (reset) content.innerHTML = `<div class="empty-state" style="color:#b91c1c;">Error: ${(e as Error).message}</div>`;
@@ -927,8 +937,7 @@ async function openAssignModal(refEntry: { id: string } | null): Promise<void> {
 
   if (!currentSessions.length) {
     try {
-      const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
-      currentSessions = data.sessions || [];
+      await refreshSessions();
     } catch { /* show empty state below */ }
   }
 
@@ -987,8 +996,7 @@ async function doAssignToSession(sessionId: string, _sessionLabel: string): Prom
     selectedRefIds.clear();
     document.getElementById('assignModal')!.classList.remove('show');
 
-    const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
-    currentSessions = data.sessions || [];
+    await refreshSessions();
     loadMyInvites(true);
   } catch (e) {
     showResult(result, 'error', 'Failed: ' + (e as Error).message);
@@ -1014,7 +1022,6 @@ const authPanel = document.getElementById('auth-panel')!;
 
 onWalletChange((address: string | null) => {
   connectedAddress = address;
-  currentChallenge = null;
   authToken        = null;
 
   if (address) {
@@ -1141,9 +1148,7 @@ document.getElementById('submitPoolKeysBtn')!.addEventListener('click', async ()
 
   if (!raw) return;
 
-  const keys = raw.split('\n')
-    .map(l => l.trim())
-    .filter(l => /^0x[a-fA-F0-9]{64}$/.test(l));
+  const keys = parsePrivateKeys(raw);
 
   if (!keys.length) {
     showResult(result, 'error', 'No valid keys found. Keys must be 0x + 64 hex characters.');
@@ -1185,8 +1190,7 @@ async function loadSessions(): Promise<void> {
   content.innerHTML = '<div class="empty-state">Loading…</div>';
 
   try {
-    const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
-    currentSessions = data.sessions || [];
+    await refreshSessions();
     renderSessions(currentSessions);
   } catch (e) {
     content.innerHTML = `<div class="empty-state" style="color:#b91c1c;">Error: ${(e as Error).message}</div>`;
@@ -1308,8 +1312,7 @@ document.getElementById('confirmCreateBtn')!.addEventListener('click', async () 
 
     const session = await distributions.createSession(body) as Session;
     document.getElementById('createModal')!.classList.remove('show');
-    const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
-    currentSessions = data.sessions || [];
+    await refreshSessions();
     openSession(session);
   } catch (e) {
     showResult(result, 'error', 'Failed: ' + (e as Error).message);
@@ -1571,8 +1574,7 @@ document.getElementById('confirmDeleteBtn')!.addEventListener('click', async () 
     await distributions.deleteSession(sessionId);
     document.getElementById('deleteConfirmRow')!.style.display = 'none';
     currentSession = null;
-    const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
-    currentSessions = data.sessions || [];
+    await refreshSessions();
     renderSessions(currentSessions);
     show('view-sessions');
     setSessionsTabActive();
@@ -1606,9 +1608,7 @@ document.getElementById('submitKeysBtn')!.addEventListener('click', async () => 
 
   if (!raw) return;
 
-  const keys = raw.split('\n')
-    .map(l => l.trim())
-    .filter(l => /^0x[a-fA-F0-9]{64}$/.test(l));
+  const keys = parsePrivateKeys(raw);
 
   if (!keys.length) {
     showResult(result, 'error', 'No valid keys found. Keys must be 0x + 64 hex characters.');
@@ -1649,91 +1649,101 @@ document.getElementById('submitKeysBtn')!.addEventListener('click', async () => 
 
 // ── Keys list ─────────────────────────────────────────────────────────────────
 
+function makeKeyRow(k: KeyEntry): HTMLDivElement {
+  const row     = document.createElement('div');
+  row.className = 'key-row';
+  const preview = k.privateKey ? keyPreview(k.privateKey) : '—';
+  const acct    = k.accountAddress
+    ? `<span style="font-size:10px;color:#9b9db3;">${shortAddr(k.accountAddress)}</span>`
+    : '';
+
+  let actionsHtml = '';
+  if (k.status === 'queued') {
+    actionsHtml = `
+      <div class="key-actions">
+        <button class="btn-xs" data-action="reassign" title="Move to another session">↔ Reassign</button>
+        <button class="btn-xs danger" data-action="removekey" title="Remove from session">✕</button>
+      </div>`;
+  }
+
+  row.innerHTML = `
+    <span class="key-addr">${preview}</span>
+    ${acct}
+    <span class="key-status status-${k.status}">${k.status}</span>
+    ${actionsHtml}
+  `;
+
+  if (k.status === 'queued') {
+    row.querySelector('[data-action="reassign"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openReassignModal(k, row);
+    });
+    row.querySelector('[data-action="removekey"]')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget as HTMLButtonElement;
+      btn.disabled = true;
+      try {
+        await distributions.removeKey(currentSession!.id, k.id);
+
+        const sessionGroup = getSessionGroup(currentSession!.id);
+        if (sessionGroup && k.privateKey) {
+          try {
+            const addr = deriveAccountAddress(k.privateKey);
+            await untrustAddressesInGroup(sessionGroup.group, [addr], sessionGroup.ownerSafe);
+          } catch { /* non-fatal */ }
+        }
+
+        row.remove();
+        const summaryEl = document.getElementById('statsSummary')!;
+        const m = summaryEl.textContent?.match(/(\d+) claimed, (\d+) total/);
+        if (m) summaryEl.textContent = `${m[1]} claimed, ${Math.max(0, parseInt(m[2]) - 1)} total`;
+      } catch (err) {
+        alert('Failed to remove: ' + (err as Error).message);
+        btn.disabled = false;
+      }
+    });
+  }
+
+  return row;
+}
+
 async function loadKeys(reset = false): Promise<void> {
   if (reset) { keysOffset = 0; loadKeysClaimed = []; }
   const list = document.getElementById('keysList')!;
   if (reset) list.innerHTML = '<div style="font-size:12px;color:#9b9db3;padding:8px 0;">Loading invites…</div>';
 
   try {
-    const data = await distributions.listKeys(currentSession!.id, {
-      limit: KEYS_PAGE,
-      offset: keysOffset,
-    }) as { keys?: KeyEntry[]; total: number };
+    // Fetch all pages iteratively
+    let total = Infinity;
+    while (keysOffset < total) {
+      const data = await distributions.listKeys(currentSession!.id, {
+        limit: KEYS_PAGE,
+        offset: keysOffset,
+      }) as { keys?: KeyEntry[]; total: number };
 
-    if (reset) list.innerHTML = '';
+      total = data.total;
 
-    if (!data.keys?.length && keysOffset === 0) {
-      list.innerHTML = '<div class="empty-state" style="padding:16px 0;">No invites yet — add keys above.</div>';
-      return;
-    }
-
-    list.querySelector('.claimed-toggle')?.remove();
-    list.querySelector('.claimed-list')?.remove();
-
-    const active  = (data.keys ?? []).filter(k => k.status !== 'claimed');
-    const claimed = (data.keys ?? []).filter(k => k.status === 'claimed');
-    loadKeysClaimed.push(...claimed);
-
-    function makeKeyRow(k: KeyEntry): HTMLDivElement {
-      const row     = document.createElement('div');
-      row.className = 'key-row';
-      const preview = k.privateKey ? keyPreview(k.privateKey) : '—';
-      const acct    = k.accountAddress
-        ? `<span style="font-size:10px;color:#9b9db3;">${shortAddr(k.accountAddress)}</span>`
-        : '';
-
-      let actionsHtml = '';
-      if (k.status === 'queued') {
-        actionsHtml = `
-          <div class="key-actions">
-            <button class="btn-xs" data-action="reassign" title="Move to another session">↔ Reassign</button>
-            <button class="btn-xs danger" data-action="removekey" title="Remove from session">✕</button>
-          </div>`;
+      if (keysOffset === 0) {
+        list.innerHTML = '';
+        if (!data.keys?.length) {
+          list.innerHTML = '<div class="empty-state" style="padding:16px 0;">No invites yet — add keys above.</div>';
+          return;
+        }
       }
 
-      row.innerHTML = `
-        <span class="key-addr">${preview}</span>
-        ${acct}
-        <span class="key-status status-${k.status}">${k.status}</span>
-        ${actionsHtml}
-      `;
+      list.querySelector('.claimed-toggle')?.remove();
+      list.querySelector('.claimed-list')?.remove();
 
-      if (k.status === 'queued') {
-        row.querySelector('[data-action="reassign"]')?.addEventListener('click', (e) => {
-          e.stopPropagation();
-          openReassignModal(k, row);
-        });
-        row.querySelector('[data-action="removekey"]')?.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          const btn = e.currentTarget as HTMLButtonElement;
-          btn.disabled = true;
-          try {
-            await distributions.removeKey(currentSession!.id, k.id);
+      const active  = (data.keys ?? []).filter(k => k.status !== 'claimed');
+      const claimed = (data.keys ?? []).filter(k => k.status === 'claimed');
+      loadKeysClaimed.push(...claimed);
 
-            const sessionGroup = getSessionGroup(currentSession!.id);
-            if (sessionGroup && k.privateKey) {
-              try {
-                const addr = deriveAccountAddress(k.privateKey);
-                await untrustAddressesInGroup(sessionGroup.group, [addr], sessionGroup.ownerSafe);
-              } catch { /* non-fatal */ }
-            }
-
-            row.remove();
-            const summaryEl = document.getElementById('statsSummary')!;
-            const m = summaryEl.textContent?.match(/(\d+) claimed, (\d+) total/);
-            if (m) summaryEl.textContent = `${m[1]} claimed, ${Math.max(0, parseInt(m[2]) - 1)} total`;
-          } catch (err) {
-            alert('Failed to remove: ' + (err as Error).message);
-            btn.disabled = false;
-          }
-        });
+      for (const k of active) {
+        list.appendChild(makeKeyRow(k));
       }
 
-      return row;
-    }
-
-    for (const k of active) {
-      list.appendChild(makeKeyRow(k));
+      keysOffset += (data.keys ?? []).length;
+      if (!data.keys?.length) break;  // guard against empty pages
     }
 
     if (loadKeysClaimed.length) {
@@ -1756,12 +1766,6 @@ async function loadKeys(reset = false): Promise<void> {
 
       list.appendChild(toggle);
       list.appendChild(claimedList);
-    }
-
-    keysOffset += (data.keys ?? []).length;
-
-    if (keysOffset < data.total) {
-      loadKeys(false);
     }
   } catch (e) {
     if (reset) list.innerHTML = `<div class="empty-state" style="color:#b91c1c;">Error: ${(e as Error).message}</div>`;
@@ -1843,8 +1847,7 @@ async function doReassign(targetSessionId: string, _targetSessionLabel: string):
     document.getElementById('reassignModal')!.classList.remove('show');
     reassignKey = null;
 
-    const data = await distributions.listSessions(connectedAddress, { limit: 100 }) as { sessions?: Session[] };
-    currentSessions = data.sessions || [];
+    await refreshSessions();
 
     const summaryEl = document.getElementById('statsSummary')!;
     const m = summaryEl.textContent?.match(/(\d+) claimed, (\d+) total/);
