@@ -1231,6 +1231,10 @@ function renderSessions(sessions: Session[]): void {
             <span>Total</span>
           </div>
           <div class="stat-item">
+            <span class="stat-num orange" id="dispatched-stat-${s.id}">—</span>
+            <span>Dispatched</span>
+          </div>
+          <div class="stat-item">
             <span class="stat-num green">${s.claimedCount ?? '—'}</span>
             <span>Claimed</span>
           </div>
@@ -1245,6 +1249,19 @@ function renderSessions(sessions: Session[]): void {
       </div>
     `;
   }).join('');
+
+  // Fetch dispatched counts from stats endpoint (fire-and-forget)
+  sessions.forEach(s => {
+    fetch(`${REFERRALS_BASE}/d/${s.slug}/stats`)
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { dispatched?: number } | null) => {
+        const el = document.getElementById(`dispatched-stat-${s.id}`);
+        if (el && data != null && typeof data.dispatched === 'number') {
+          el.textContent = String(data.dispatched);
+        }
+      })
+      .catch(() => { /* non-fatal */ });
+  });
 
   content.querySelectorAll<HTMLDivElement>('.session-card').forEach(card => {
     card.addEventListener('click', (e) => {
@@ -1268,6 +1285,85 @@ function renderSessions(sessions: Session[]): void {
     });
   });
 }
+
+// ── Link lookup ───────────────────────────────────────────────────────────────
+
+function extractSlugFromLink(input: string): string | null {
+  const trimmed = input.trim();
+  // Match https://circles.gnosis.io/invitation/<slug> or just a bare slug
+  const urlMatch = trimmed.match(/\/invitation\/([A-Za-z0-9_-]+)/);
+  if (urlMatch) return urlMatch[1];
+  // If it looks like a plain slug (no slashes, no spaces)
+  if (/^[A-Za-z0-9_-]+$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+async function lookupDistributionLink(): Promise<void> {
+  const input  = document.getElementById('lookupLinkInput') as HTMLInputElement;
+  const result = document.getElementById('lookupResult')!;
+  const btn    = document.getElementById('lookupLinkBtn') as HTMLButtonElement;
+
+  const slug = extractSlugFromLink(input.value);
+  if (!slug) {
+    result.style.display = 'block';
+    result.innerHTML = '<span style="color:#b91c1c;">Could not extract a slug from that URL.</span>';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  result.style.display = 'block';
+  result.innerHTML = 'Fetching stats…';
+
+  try {
+    const res  = await fetch(`${REFERRALS_BASE}/d/${slug}/stats`);
+    if (!res.ok) {
+      result.innerHTML = `<span style="color:#b91c1c;">Error ${res.status}: could not fetch stats for <code>${escapeHtml(slug)}</code>.</span>`;
+      return;
+    }
+    const data = await res.json() as {
+      dispatched?: number;
+      claimed?: number;
+      queued?: number;
+      label?: string;
+      paused?: boolean;
+      expiresAt?: string;
+      [key: string]: unknown;
+    };
+
+    const dispatched = typeof data.dispatched === 'number' ? data.dispatched : '—';
+    const claimed    = typeof data.claimed    === 'number' ? data.claimed    : '—';
+    const queued     = typeof data.queued     === 'number' ? data.queued     : '—';
+    const total      = (typeof data.dispatched === 'number' ? data.dispatched : 0)
+                     + (typeof data.claimed    === 'number' ? data.claimed    : 0)
+                     + (typeof data.queued     === 'number' ? data.queued     : 0);
+
+    const labelHtml = data.label
+      ? `<span style="font-weight:600;color:#060a40;">${escapeHtml(String(data.label))}</span> &mdash; `
+      : '';
+    result.innerHTML = `
+      <div style="margin-bottom:8px;">
+        ${labelHtml}<code style="font-size:12px;color:#6a6c8c;">${escapeHtml(slug)}</code>
+      </div>
+      <div style="display:flex;gap:16px;font-size:12px;color:#6a6c8c;">
+        <div class="stat-item"><span class="stat-num">${typeof total === 'number' && total > 0 ? total : '—'}</span><span>Total</span></div>
+        <div class="stat-item"><span class="stat-num orange">${dispatched}</span><span>Dispatched</span></div>
+        <div class="stat-item"><span class="stat-num green">${claimed}</span><span>Claimed</span></div>
+        <div class="stat-item"><span class="stat-num">${queued}</span><span>Queued</span></div>
+      </div>
+    `;
+  } catch (e) {
+    result.innerHTML = `<span style="color:#b91c1c;">Failed to fetch: ${escapeHtml((e as Error).message)}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Look up';
+  }
+}
+
+document.getElementById('lookupLinkBtn')!.addEventListener('click', lookupDistributionLink);
+document.getElementById('lookupLinkInput')!.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') lookupDistributionLink();
+});
 
 // ── Create session modal ──────────────────────────────────────────────────────
 
@@ -1359,9 +1455,10 @@ function renderSessionDetail(s: Session): void {
   document.getElementById('detailMeta')!.textContent =
     `${s.paused ? 'Paused' : 'Active'}${expiryStr}`;
 
-  const total   = (s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0);
-  const claimed = s.claimedCount ?? 0;
-  document.getElementById('statsSummary')!.textContent = `${claimed} claimed, ${total} total`;
+  const total      = (s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0);
+  const claimed    = s.claimedCount ?? 0;
+  const dispatched = s.dispatchedCount ?? 0;
+  document.getElementById('statsSummary')!.textContent = `${claimed} claimed, ${dispatched} dispatched, ${total} total`;
 
   const pauseBtn = document.getElementById('pauseBtn') as HTMLButtonElement;
   pauseBtn.textContent = s.paused ? '▶' : '⏸';
@@ -1647,11 +1744,92 @@ document.getElementById('submitKeysBtn')!.addEventListener('click', async () => 
   btn.disabled = false;
 });
 
+// ── Dispatched profile check ──────────────────────────────────────────────────
+
+async function checkDispatchedProfiles(keys: KeyEntry[]): Promise<void> {
+  const dispatched = keys.filter(k => k.status === 'dispatched' && k.accountAddress);
+  if (!dispatched.length) return;
+
+  const addresses = dispatched.map(k => k.accountAddress!);
+  try {
+    const res = await fetch('https://staging.circlesubi.network/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1,
+        method: 'circles_getProfileByAddressBatch',
+        params: [addresses],
+      }),
+    });
+    if (!res.ok) return;
+    const json = await res.json() as { result?: Array<{ address: string; name?: string } | null> };
+    const results = json.result ?? [];
+
+    // Accounts with a profile count as claimed; without = still dispatched
+    const profileSet = new Set(
+      results.filter(r => r?.name).map(r => r!.address.toLowerCase())
+    );
+    const withProfile     = profileSet.size;
+    const stillDispatched = dispatched.length - withProfile;
+
+    // Update status badge and move promoted rows into the claimed section
+    const list = document.getElementById('keysList');
+    if (list) {
+      // Ensure a claimed section exists (may not if no server-side claimed keys)
+      let claimedList = list.querySelector<HTMLElement>('.claimed-list');
+      let toggle      = list.querySelector<HTMLButtonElement>('.claimed-toggle');
+      if (!claimedList) {
+        claimedList = document.createElement('div');
+        claimedList.className  = 'claimed-list';
+        claimedList.style.display = 'none';
+        toggle = document.createElement('button');
+        toggle.className   = 'claimed-toggle load-more-btn';
+        toggle.textContent = '0 claimed invites';
+        toggle.addEventListener('click', () => {
+          const open = claimedList!.style.display !== 'none';
+          claimedList!.style.display = open ? 'none' : '';
+          toggle!.textContent = open ? `${claimedList!.childElementCount} claimed invite${claimedList!.childElementCount === 1 ? '' : 's'}` : 'Hide claimed';
+        });
+        list.appendChild(toggle);
+        list.appendChild(claimedList);
+      }
+
+      profileSet.forEach(addr => {
+        const row = list!.querySelector<HTMLElement>(`[data-account="${addr}"]`);
+        if (!row || row.closest('.claimed-list')) return; // already claimed
+        const badge = row.querySelector('.key-status');
+        if (badge) {
+          badge.className  = 'key-status status-claimed';
+          badge.textContent = 'claimed';
+        }
+        claimedList!.appendChild(row); // move to bottom
+      });
+
+      // Update toggle label
+      const count = claimedList.childElementCount;
+      if (toggle && claimedList.style.display === 'none') {
+        toggle.textContent = `${count} claimed invite${count === 1 ? '' : 's'}`;
+      }
+    }
+
+    if (withProfile === 0) return; // nothing left to update in summary
+
+    const summaryEl = document.getElementById('statsSummary');
+    if (!summaryEl || !currentSession) return;
+
+    const base       = currentSession.claimedCount ?? 0;
+    const total      = (currentSession.queuedCount ?? 0) + (currentSession.dispatchedCount ?? 0) + base;
+    const claimed    = base + withProfile;
+    summaryEl.textContent = `${claimed} claimed, ${stillDispatched} dispatched, ${total} total`;
+  } catch { /* non-fatal */ }
+}
+
 // ── Keys list ─────────────────────────────────────────────────────────────────
 
 function makeKeyRow(k: KeyEntry): HTMLDivElement {
   const row     = document.createElement('div');
   row.className = 'key-row';
+  if (k.accountAddress) row.dataset.account = k.accountAddress.toLowerCase();
   const preview = k.privateKey ? keyPreview(k.privateKey) : '—';
   const acct    = k.accountAddress
     ? `<span style="font-size:10px;color:#9b9db3;">${shortAddr(k.accountAddress)}</span>`
@@ -1712,6 +1890,8 @@ async function loadKeys(reset = false): Promise<void> {
   const list = document.getElementById('keysList')!;
   if (reset) list.innerHTML = '<div style="font-size:12px;color:#9b9db3;padding:8px 0;">Loading invites…</div>';
 
+  const allActiveKeys: KeyEntry[] = [];
+
   try {
     // Fetch all pages iteratively
     let total = Infinity;
@@ -1737,6 +1917,7 @@ async function loadKeys(reset = false): Promise<void> {
       const active  = (data.keys ?? []).filter(k => k.status !== 'claimed');
       const claimed = (data.keys ?? []).filter(k => k.status === 'claimed');
       loadKeysClaimed.push(...claimed);
+      allActiveKeys.push(...active);
 
       for (const k of active) {
         list.appendChild(makeKeyRow(k));
@@ -1745,6 +1926,9 @@ async function loadKeys(reset = false): Promise<void> {
       keysOffset += (data.keys ?? []).length;
       if (!data.keys?.length) break;  // guard against empty pages
     }
+
+    // Fire-and-forget: check dispatched accounts for missing CIDv0 profiles
+    checkDispatchedProfiles(allActiveKeys).catch(() => { /* non-fatal */ });
 
     if (loadKeysClaimed.length) {
       const toggle = document.createElement('button');
