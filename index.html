@@ -574,6 +574,7 @@
         <div style="display:flex;gap:6px;">
             <button class="btn-secondary btn-sm" id="pauseBtn" title="Pause" style="padding:4px 8px;font-size:14px;line-height:1;">⏸</button>
             <button class="btn-secondary btn-sm" id="refreshDetailBtn" title="Refresh" style="padding:4px 8px;font-size:14px;line-height:1;">↻</button>
+            <button class="btn-secondary btn-sm" id="reassignSessionBtn" title="Reassign to another address" style="padding:4px 8px;font-size:14px;line-height:1;">↪</button>
             <button class="btn-secondary btn-sm" id="deleteSessionBtn" title="Delete session" style="padding:4px 8px;font-size:14px;line-height:1;color:#dc2626;border-color:#fca5a5;">🗑</button>
         </div>
     </div>
@@ -581,6 +582,11 @@
         <span style="font-size:13px;color:#dc2626;flex:1;">Delete this session? This cannot be undone.</span>
         <button class="btn-sm" id="confirmDeleteBtn" style="background:#dc2626;padding:4px 10px;font-size:13px;">Delete</button>
         <button class="btn-secondary btn-sm" id="cancelDeleteBtn" style="padding:4px 10px;font-size:13px;">Cancel</button>
+    </div>
+    <div id="delegateRow" style="display:none;align-items:center;gap:8px;margin-bottom:8px;padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;">
+        <input type="text" id="delegateAddressInput" placeholder="0x… new owner address" style="flex:1;font-size:13px;padding:4px 8px;border:1px solid #bfdbfe;border-radius:6px;outline:none;" />
+        <button class="btn-sm" id="confirmDelegateBtn" style="padding:4px 10px;font-size:13px;">Reassign</button>
+        <button class="btn-secondary btn-sm" id="cancelDelegateBtn" style="padding:4px 10px;font-size:13px;">Cancel</button>
     </div>
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
@@ -758,6 +764,18 @@
         <div class="result" id="reassignResult" style="margin-top:8px;"></div>
         <div class="modal-actions">
             <button class="btn-secondary" id="cancelReassignBtn">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Modal: Delegate success ─────────────────────────────────────────────── -->
+<div class="modal-overlay" id="delegateSuccessModal">
+    <div class="modal" style="text-align:center;">
+        <div style="font-size:36px;margin-bottom:8px;">✓</div>
+        <h3 style="margin-bottom:6px;">Session Reassigned</h3>
+        <p id="delegateSuccessMsg" style="font-size:13px;color:#6a6c8c;margin-bottom:16px;"></p>
+        <div class="modal-actions">
+            <button id="closeDelegateSuccessBtn">Done</button>
         </div>
     </div>
 </div>

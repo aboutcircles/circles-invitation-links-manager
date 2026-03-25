@@ -1426,6 +1426,7 @@ function openSession(session: Session): void {
   renderGroupAssignRow(session.id);
   clearResult(document.getElementById('generateResult')!);
   document.getElementById('deleteConfirmRow')!.style.display = 'none';
+  document.getElementById('delegateRow')!.style.display = 'none';
   show('view-detail');
   loadKeys(true);
   loadQuota();
@@ -1680,6 +1681,78 @@ document.getElementById('confirmDeleteBtn')!.addEventListener('click', async () 
     confirmBtn.disabled = false;
     cancelBtn.disabled  = false;
   }
+});
+
+// ── Delegate session to another address ───────────────────────────────────────
+
+document.getElementById('reassignSessionBtn')!.addEventListener('click', () => {
+  document.getElementById('deleteConfirmRow')!.style.display = 'none';
+  const row = document.getElementById('delegateRow')!;
+  row.style.display = row.style.display === 'flex' ? 'none' : 'flex';
+  if (row.style.display === 'flex') {
+    (document.getElementById('delegateAddressInput') as HTMLInputElement).value = '';
+    (document.getElementById('delegateAddressInput') as HTMLInputElement).focus();
+  }
+});
+
+document.getElementById('cancelDelegateBtn')!.addEventListener('click', () => {
+  document.getElementById('delegateRow')!.style.display = 'none';
+});
+
+document.getElementById('confirmDelegateBtn')!.addEventListener('click', async () => {
+  if (!currentSession) return;
+  const input      = document.getElementById('delegateAddressInput') as HTMLInputElement;
+  const confirmBtn = document.getElementById('confirmDelegateBtn') as HTMLButtonElement;
+  const cancelBtn  = document.getElementById('cancelDelegateBtn') as HTMLButtonElement;
+
+  const newAddress = input.value.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(newAddress)) {
+    input.style.borderColor = '#fca5a5';
+    input.focus();
+    return;
+  }
+  input.style.borderColor = '';
+
+  confirmBtn.disabled = true;
+  cancelBtn.disabled  = true;
+  confirmBtn.textContent = 'Reassigning…';
+
+  try {
+    const res = await fetch(`${REFERRALS_BASE}/distributions/sessions/${currentSession.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+      body: JSON.stringify({ inviterAddress: newAddress }),
+    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => String(res.status));
+      throw new Error(msg || String(res.status));
+    }
+
+    document.getElementById('delegateRow')!.style.display = 'none';
+
+    // Show success modal
+    document.getElementById('delegateSuccessMsg')!.textContent =
+      `This session has been transferred to ${newAddress}.`;
+    document.getElementById('delegateSuccessModal')!.classList.add('show');
+
+    // Refresh sessions in background so list is current when user goes back
+    currentSession = null;
+    await refreshSessions();
+    renderSessions(currentSessions);
+  } catch (e) {
+    input.style.borderColor = '#fca5a5';
+    alert('Failed to reassign: ' + (e as Error).message);
+  } finally {
+    confirmBtn.disabled = false;
+    cancelBtn.disabled  = false;
+    confirmBtn.textContent = 'Reassign';
+  }
+});
+
+document.getElementById('closeDelegateSuccessBtn')!.addEventListener('click', () => {
+  document.getElementById('delegateSuccessModal')!.classList.remove('show');
+  show('view-sessions');
+  setSessionsTabActive();
 });
 
 document.getElementById('addKeysBtn')!.addEventListener('click', () => {
