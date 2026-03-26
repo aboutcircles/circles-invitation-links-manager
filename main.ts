@@ -25,6 +25,7 @@ interface Session {
 interface KeyEntry {
   id: string;
   privateKey?: string;
+  keyPreview?: string;
   accountAddress?: string;
   status: 'queued' | 'dispatched' | 'claimed';
 }
@@ -92,7 +93,6 @@ let selectedExpiry    = 0;  // days; 0 = no expiry
 let myInvitesOffset  = 0;
 const MY_INVITES_PAGE = 50;
 let myInvitesClaimed: Referral[] = [];
-let loadKeysClaimed:  KeyEntry[] = [];
 
 let currentSessions:  Session[] = [];
 let assignTargetKeys: Array<{ id: string }> = [];
@@ -1817,85 +1817,6 @@ document.getElementById('submitKeysBtn')!.addEventListener('click', async () => 
   btn.disabled = false;
 });
 
-// ── Dispatched profile check ──────────────────────────────────────────────────
-
-async function checkDispatchedProfiles(keys: KeyEntry[]): Promise<void> {
-  const dispatched = keys.filter(k => k.status === 'dispatched' && k.accountAddress);
-  if (!dispatched.length) return;
-
-  const addresses = dispatched.map(k => k.accountAddress!);
-  try {
-    const res = await fetch('https://staging.circlesubi.network/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1,
-        method: 'circles_getProfileByAddressBatch',
-        params: [addresses],
-      }),
-    });
-    if (!res.ok) return;
-    const json = await res.json() as { result?: Array<{ address: string; name?: string } | null> };
-    const results = json.result ?? [];
-
-    // Accounts with a profile count as claimed; without = still dispatched
-    const profileSet = new Set(
-      results.filter(r => r?.name).map(r => r!.address.toLowerCase())
-    );
-    const withProfile     = profileSet.size;
-    const stillDispatched = dispatched.length - withProfile;
-
-    // Update status badge and move promoted rows into the claimed section
-    const list = document.getElementById('keysList');
-    if (list) {
-      // Ensure a claimed section exists (may not if no server-side claimed keys)
-      let claimedList = list.querySelector<HTMLElement>('.claimed-list');
-      let toggle      = list.querySelector<HTMLButtonElement>('.claimed-toggle');
-      if (!claimedList) {
-        claimedList = document.createElement('div');
-        claimedList.className  = 'claimed-list';
-        claimedList.style.display = 'none';
-        toggle = document.createElement('button');
-        toggle.className   = 'claimed-toggle load-more-btn';
-        toggle.textContent = '0 claimed invites';
-        toggle.addEventListener('click', () => {
-          const open = claimedList!.style.display !== 'none';
-          claimedList!.style.display = open ? 'none' : '';
-          toggle!.textContent = open ? `${claimedList!.childElementCount} claimed invite${claimedList!.childElementCount === 1 ? '' : 's'}` : 'Hide claimed';
-        });
-        list.appendChild(toggle);
-        list.appendChild(claimedList);
-      }
-
-      profileSet.forEach(addr => {
-        const row = list!.querySelector<HTMLElement>(`[data-account="${addr}"]`);
-        if (!row || row.closest('.claimed-list')) return; // already claimed
-        const badge = row.querySelector('.key-status');
-        if (badge) {
-          badge.className  = 'key-status status-claimed';
-          badge.textContent = 'claimed';
-        }
-        claimedList!.appendChild(row); // move to bottom
-      });
-
-      // Update toggle label
-      const count = claimedList.childElementCount;
-      if (toggle && claimedList.style.display === 'none') {
-        toggle.textContent = `${count} claimed invite${count === 1 ? '' : 's'}`;
-      }
-    }
-
-    if (withProfile === 0) return; // nothing left to update in summary
-
-    const summaryEl = document.getElementById('statsSummary');
-    if (!summaryEl || !currentSession) return;
-
-    const base       = currentSession.claimedCount ?? 0;
-    const total      = (currentSession.queuedCount ?? 0) + (currentSession.dispatchedCount ?? 0) + base;
-    const claimed    = base + withProfile;
-    summaryEl.textContent = `${claimed} claimed, ${stillDispatched} dispatched, ${total} total`;
-  } catch { /* non-fatal */ }
-}
 
 // ── Keys list ─────────────────────────────────────────────────────────────────
 
@@ -1903,7 +1824,7 @@ function makeKeyRow(k: KeyEntry): HTMLDivElement {
   const row     = document.createElement('div');
   row.className = 'key-row';
   if (k.accountAddress) row.dataset.account = k.accountAddress.toLowerCase();
-  const preview = k.privateKey ? keyPreview(k.privateKey) : '—';
+  const preview = k.keyPreview ?? (k.privateKey ? keyPreview(k.privateKey) : '—');
   const acct    = k.accountAddress
     ? `<span style="font-size:10px;color:#9b9db3;">${shortAddr(k.accountAddress)}</span>`
     : '';
@@ -1959,11 +1880,11 @@ function makeKeyRow(k: KeyEntry): HTMLDivElement {
 }
 
 async function loadKeys(reset = false): Promise<void> {
-  if (reset) { keysOffset = 0; loadKeysClaimed = []; }
+  if (reset) keysOffset = 0;
   const list = document.getElementById('keysList')!;
   if (reset) list.innerHTML = '<div style="font-size:12px;color:#9b9db3;padding:8px 0;">Loading invites…</div>';
 
-  const allActiveKeys: KeyEntry[] = [];
+  const allClaimed: KeyEntry[] = [];
 
   try {
     // Fetch all pages iteratively
@@ -1987,37 +1908,33 @@ async function loadKeys(reset = false): Promise<void> {
       list.querySelector('.claimed-toggle')?.remove();
       list.querySelector('.claimed-list')?.remove();
 
-      const active  = (data.keys ?? []).filter(k => k.status !== 'claimed');
-      const claimed = (data.keys ?? []).filter(k => k.status === 'claimed');
-      loadKeysClaimed.push(...claimed);
-      allActiveKeys.push(...active);
-
-      for (const k of active) {
-        list.appendChild(makeKeyRow(k));
+      for (const k of (data.keys ?? [])) {
+        if (k.status === 'claimed') {
+          allClaimed.push(k);
+        } else {
+          list.appendChild(makeKeyRow(k));
+        }
       }
 
       keysOffset += (data.keys ?? []).length;
       if (!data.keys?.length) break;  // guard against empty pages
     }
 
-    // Fire-and-forget: check dispatched accounts for missing CIDv0 profiles
-    checkDispatchedProfiles(allActiveKeys).catch(() => { /* non-fatal */ });
-
-    if (loadKeysClaimed.length) {
+    if (allClaimed.length) {
       const toggle = document.createElement('button');
       toggle.className = 'claimed-toggle load-more-btn';
-      toggle.textContent = `${loadKeysClaimed.length} claimed invite${loadKeysClaimed.length === 1 ? '' : 's'}`;
+      toggle.textContent = `${allClaimed.length} claimed invite${allClaimed.length === 1 ? '' : 's'}`;
 
       const claimedList = document.createElement('div');
       claimedList.className = 'claimed-list';
       claimedList.style.display = 'none';
-      for (const k of loadKeysClaimed) claimedList.appendChild(makeKeyRow(k));
+      for (const k of allClaimed) claimedList.appendChild(makeKeyRow(k));
 
       toggle.addEventListener('click', () => {
         const open = claimedList.style.display !== 'none';
         claimedList.style.display = open ? 'none' : '';
         toggle.textContent = open
-          ? `${loadKeysClaimed.length} claimed invite${loadKeysClaimed.length === 1 ? '' : 's'}`
+          ? `${allClaimed.length} claimed invite${allClaimed.length === 1 ? '' : 's'}`
           : 'Hide claimed';
       });
 
