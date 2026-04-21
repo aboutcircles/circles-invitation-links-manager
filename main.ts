@@ -1671,6 +1671,9 @@ document.getElementById('confirmDeleteBtn')!.addEventListener('click', async () 
 
     span.textContent = 'Deleting session…';
     await distributions.deleteSession(sessionId);
+    confirmBtn.disabled = false;
+    cancelBtn.disabled  = false;
+    span.textContent = 'Delete this session? This cannot be undone.';
     document.getElementById('deleteConfirmRow')!.style.display = 'none';
     currentSession = null;
     await refreshSessions();
