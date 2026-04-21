@@ -1408,6 +1408,7 @@ document.getElementById('confirmCreateBtn')!.addEventListener('click', async () 
 
     const session = await distributions.createSession(body) as Session;
     document.getElementById('createModal')!.classList.remove('show');
+    btn.disabled = false;
     await refreshSessions();
     openSession(session);
   } catch (e) {
