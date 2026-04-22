@@ -103,7 +103,7 @@ const selectedRefIds  = new Set<string>();
 
 const distributions = new Distributions(REFERRALS_BASE, () => Promise.resolve(authToken));
 const referrals     = new Referrals(REFERRALS_BASE, () => Promise.resolve(authToken));
-const rpc           = new CirclesRpc('https://rpc.circlesubi.network/');
+const rpc           = new CirclesRpc('https://rpc.aboutcircles.com');
 
 // ── BaseGroup trustBatchWithConditions ABI (minimal) ─────────────────────────
 
@@ -137,7 +137,7 @@ const INVITATION_FARM_ABI = [{
 const publicClient = createPublicClient({ chain: gnosis, transport: http('https://rpc.gnosischain.com') });
 
 const inviteFarm = new InviteFarm({
-  circlesRpcUrl:            'https://rpc.circlesubi.network/',
+  circlesRpcUrl:            'https://rpc.aboutcircles.com',
   pathfinderUrl:            'https://pathfinder.aboutcircles.com',
   profileServiceUrl:        'https://profile.aboutcircles.com',
   referralsServiceUrl:      REFERRALS_BASE,
