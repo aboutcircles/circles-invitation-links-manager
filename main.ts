@@ -1551,6 +1551,15 @@ async function generateInvitations(): Promise<void> {
 
     showResult(result, 'pending', 'Adding to session…');
     const privateKeys = referrals.map(r => r.secret);
+    for (let i = 0; i < privateKeys.length; i += 200) {
+      const chunk       = privateKeys.slice(i, i + 200);
+      const invitations = chunk.map(pk => ({ privateKey: pk, inviter: connectedAddress }));
+      await fetch(`${REFERRALS_BASE}/store-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ invitations }),
+      });
+    }
     for (let i = 0; i < privateKeys.length; i += 100) {
       await distributions.addKeys(currentSession!.id, privateKeys.slice(i, i + 100));
     }
