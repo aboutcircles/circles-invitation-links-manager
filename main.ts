@@ -103,7 +103,7 @@ const selectedRefIds  = new Set<string>();
 
 const distributions = new Distributions(REFERRALS_BASE, () => Promise.resolve(authToken));
 const referrals     = new Referrals(REFERRALS_BASE, () => Promise.resolve(authToken));
-const rpc           = new CirclesRpc('https://rpc.circlesubi.network/');
+const rpc           = new CirclesRpc('https://rpc.aboutcircles.com');
 
 // ── BaseGroup trustBatchWithConditions ABI (minimal) ─────────────────────────
 
@@ -137,7 +137,7 @@ const INVITATION_FARM_ABI = [{
 const publicClient = createPublicClient({ chain: gnosis, transport: http('https://rpc.gnosischain.com') });
 
 const inviteFarm = new InviteFarm({
-  circlesRpcUrl:            'https://rpc.circlesubi.network/',
+  circlesRpcUrl:            'https://rpc.aboutcircles.com',
   pathfinderUrl:            'https://pathfinder.aboutcircles.com',
   profileServiceUrl:        'https://profile.aboutcircles.com',
   referralsServiceUrl:      REFERRALS_BASE,
@@ -1408,6 +1408,7 @@ document.getElementById('confirmCreateBtn')!.addEventListener('click', async () 
 
     const session = await distributions.createSession(body) as Session;
     document.getElementById('createModal')!.classList.remove('show');
+    btn.disabled = false;
     await refreshSessions();
     openSession(session);
   } catch (e) {
@@ -1564,6 +1565,15 @@ async function generateInvitations(): Promise<void> {
 
     showResult(result, 'pending', 'Adding to session…');
     const privateKeys = referrals.map(r => r.secret);
+    for (let i = 0; i < privateKeys.length; i += 200) {
+      const chunk       = privateKeys.slice(i, i + 200);
+      const invitations = chunk.map(pk => ({ privateKey: pk, inviter: connectedAddress }));
+      await fetch(`${REFERRALS_BASE}/store-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ invitations }),
+      });
+    }
     for (let i = 0; i < privateKeys.length; i += 100) {
       await distributions.addKeys(currentSession!.id, privateKeys.slice(i, i + 100));
     }
@@ -1684,6 +1694,9 @@ document.getElementById('confirmDeleteBtn')!.addEventListener('click', async () 
 
     span.textContent = 'Deleting session…';
     await distributions.deleteSession(sessionId);
+    confirmBtn.disabled = false;
+    cancelBtn.disabled  = false;
+    span.textContent = 'Delete this session? This cannot be undone.';
     document.getElementById('deleteConfirmRow')!.style.display = 'none';
     currentSession = null;
     await refreshSessions();
