@@ -1489,14 +1489,14 @@ function renderSessionDetail(s: Session): void {
 // ── Quota & generate invitations ──────────────────────────────────────────────
 
 async function loadQuota(): Promise<void> {
-  const row    = document.getElementById('quotaRow')!;
-  const valEl  = document.getElementById('quotaValue')!;
-  const banner = document.getElementById('quotaBanner')!;
-  const bannerVal = document.getElementById('quotaBannerValue')!;
+  const row        = document.getElementById('quotaRow')!;
+  const valEl      = document.getElementById('quotaValue')!;
+  const banner     = document.getElementById('quotaBanner')!;
+  const bannerVal  = document.getElementById('quotaBannerValue')!;
+  const countInput = document.getElementById('generateCount') as HTMLInputElement;
+  const generateBtn = document.getElementById('generateInvitesBtn') as HTMLButtonElement;
   row.style.display    = 'none';
   banner.style.display = 'none';
-  const bannerEmpty = document.getElementById('quotaBannerEmpty')!;
-  bannerEmpty.style.display = 'none';
   if (!connectedAddress) return;
 
   try {
@@ -1506,20 +1506,27 @@ async function loadQuota(): Promise<void> {
       functionName: 'inviterQuota',
       args: [connectedAddress as Address],
     });
-    if (quota > 0n) {
-      const quotaStr   = quota.toString();
-      valEl.textContent       = quotaStr;
-      bannerVal.textContent   = quotaStr;
-      const maxCount   = Math.min(10, Number(quota));
-      const countInput = document.getElementById('generateCount') as HTMLInputElement;
-      countInput.max   = maxCount.toString();
+
+    const quotaStr = quota.toString();
+    const maxCount = Math.min(10, Number(quota));
+    const hasQuota = quota > 0n;
+
+    valEl.textContent = quotaStr;
+    bannerVal.textContent = quotaStr;
+    row.style.display = 'flex';
+    banner.style.display = 'block';
+
+    if (hasQuota) {
+      countInput.max = maxCount.toString();
       if (parseInt(countInput.value, 10) > maxCount) countInput.value = maxCount.toString();
-      row.style.display     = 'flex';
-      banner.style.display  = 'block';
-      bannerEmpty.style.display = 'none';
     } else {
-      bannerEmpty.style.display = 'block';
+      countInput.value = '1';
+      countInput.max = '1';
     }
+
+    countInput.disabled = !hasQuota;
+    generateBtn.disabled = !hasQuota;
+    generateBtn.title = hasQuota ? 'Create invites' : 'No quota available';
   } catch { /* non-fatal */ }
 }
 
@@ -1529,6 +1536,13 @@ async function generateInvitations(): Promise<void> {
   const btn        = document.getElementById('generateInvitesBtn') as HTMLButtonElement;
   const result     = document.getElementById('generateResult')!;
   const countInput = document.getElementById('generateCount') as HTMLInputElement;
+  const quotaValue = parseInt(document.getElementById('quotaValue')?.textContent || '0', 10);
+
+  if (quotaValue <= 0) {
+    showResult(result, 'error', 'No quota available to generate invitations.');
+    return;
+  }
+
   const COUNT      = Math.min(10, Math.max(1, parseInt(countInput.value, 10) || 10));
 
   btn.disabled = true;
