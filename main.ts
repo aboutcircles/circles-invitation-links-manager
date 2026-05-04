@@ -682,13 +682,9 @@ async function openGroupPickModal(): Promise<void> {
 
   list.innerHTML = controlledGroups.map((g, i) => {
     const isSelected = assigned && assigned.group.toLowerCase() === g.group.toLowerCase();
-    const viaSafe    = g._ownerSafe
-      ? `<span class="group-pick-safe" title="Acting via Safe ${g._ownerSafe}">via Safe ${shortAddr(g._ownerSafe)}</span>`
-      : '';
     return `
       <div class="group-pick-item${isSelected ? ' selected' : ''}" data-group-idx="${i}">
         <span class="group-pick-name">${escapeHtml(g.name || g.group)}</span>
-        ${viaSafe}
         <span class="group-pick-role">${escapeHtml(g._role)}</span>
       </div>
     `;
