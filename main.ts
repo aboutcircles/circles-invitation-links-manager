@@ -725,7 +725,7 @@ async function selectSessionGroup(sessionId: string, newGroup: GroupEntry): Prom
     }
 
     if (addresses.length) {
-      showResult(result, 'pending', `Trusting in ${escapeHtml(newGroup.name || newGroup.group)}…`);
+      showResult(result, 'pending', `Adding to the ${escapeHtml(newGroup.name || newGroup.group)} group…`);
       await trustAddressesInGroup(newGroup.group, addresses, newGroup._ownerSafe);
     }
 
@@ -1576,7 +1576,7 @@ async function generateInvitations(): Promise<void> {
 
     const sessionGroup = getSessionGroup(currentSession!.id);
     if (sessionGroup) {
-      showResult(result, 'pending', `Trusting in group ${escapeHtml(sessionGroup.name)}…`);
+      showResult(result, 'pending', `Adding to the ${escapeHtml(sessionGroup.name)} group…`);
       const addresses = referrals.map(r => deriveAccountAddress(r.secret)).filter(Boolean);
       if (addresses.length) await trustAddressesInGroup(sessionGroup.group, addresses, sessionGroup.ownerSafe);
     }
