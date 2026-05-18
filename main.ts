@@ -22,6 +22,41 @@ interface Session {
   claimedCount?: number;
 }
 
+interface SessionStats {
+  queued?: number;
+  dispatched?: number;
+  dispatchedInFlight?: number;
+  dispatchedExpired?: number;
+  claimed?: number;
+  label?: string;
+  paused?: boolean;
+  expiresAt?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Available = queued + dispatchedExpired (can still be claimed/redispatched)
+ * In use    = dispatchedInFlight (committed but not yet claimed)
+ * Claimed   = claimed
+ * Total     = Available + In use + Claimed
+ */
+function computeAvailableUsed(data: SessionStats): {
+  available: number | null;
+  inUse: number | null;
+  claimed: number | null;
+  total: number | null;
+} {
+  const queued     = typeof data.queued             === 'number' ? data.queued             : null;
+  const inFlight   = typeof data.dispatchedInFlight === 'number' ? data.dispatchedInFlight : null;
+  const expired    = typeof data.dispatchedExpired  === 'number' ? data.dispatchedExpired  : null;
+  const claimed    = typeof data.claimed            === 'number' ? data.claimed            : null;
+
+  const available = queued != null && expired != null ? queued + expired : null;
+  const inUse     = inFlight;
+  const total     = available != null && inUse != null && claimed != null ? available + inUse + claimed : null;
+  return { available, inUse, claimed, total };
+}
+
 interface KeyEntry {
   id: string;
   privateKey?: string;
@@ -1223,15 +1258,19 @@ function renderSessions(sessions: Session[]): void {
         </div>
         <div class="session-stats">
           <div class="stat-item">
-            <span class="stat-num">${(s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0)}</span>
+            <span class="stat-num" id="total-stat-${s.id}">${(s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0)}</span>
             <span>Total</span>
           </div>
           <div class="stat-item">
-            <span class="stat-num orange" id="dispatched-stat-${s.id}">—</span>
-            <span>Dispatched</span>
+            <span class="stat-num green" id="available-stat-${s.id}">—</span>
+            <span>Available</span>
           </div>
           <div class="stat-item">
-            <span class="stat-num green">${s.claimedCount ?? '—'}</span>
+            <span class="stat-num orange" id="inuse-stat-${s.id}">—</span>
+            <span>In use</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-num gray" id="claimed-stat-${s.id}">—</span>
             <span>Claimed</span>
           </div>
         </div>
@@ -1246,15 +1285,21 @@ function renderSessions(sessions: Session[]): void {
     `;
   }).join('');
 
-  // Fetch dispatched counts from stats endpoint (fire-and-forget)
+  // Fetch granular counts from stats endpoint (fire-and-forget)
   sessions.forEach(s => {
     fetch(`${REFERRALS_BASE}/d/${s.slug}/stats`)
       .then(r => r.ok ? r.json() : null)
-      .then((data: { dispatched?: number } | null) => {
-        const el = document.getElementById(`dispatched-stat-${s.id}`);
-        if (el && data != null && typeof data.dispatched === 'number') {
-          el.textContent = String(data.dispatched);
-        }
+      .then((data: SessionStats | null) => {
+        if (!data) return;
+        const { available, inUse, claimed, total } = computeAvailableUsed(data);
+        const totalEl     = document.getElementById(`total-stat-${s.id}`);
+        const availableEl = document.getElementById(`available-stat-${s.id}`);
+        const inUseEl     = document.getElementById(`inuse-stat-${s.id}`);
+        const claimedEl   = document.getElementById(`claimed-stat-${s.id}`);
+        if (totalEl     && total     != null) totalEl.textContent     = String(total);
+        if (availableEl && available != null) availableEl.textContent = String(available);
+        if (inUseEl     && inUse     != null) inUseEl.textContent     = String(inUse);
+        if (claimedEl   && claimed   != null) claimedEl.textContent   = String(claimed);
       })
       .catch(() => { /* non-fatal */ });
   });
@@ -1317,22 +1362,9 @@ async function lookupDistributionLink(): Promise<void> {
       result.innerHTML = `<span style="color:#b91c1c;">Error ${res.status}: could not fetch stats for <code>${escapeHtml(slug)}</code>.</span>`;
       return;
     }
-    const data = await res.json() as {
-      dispatched?: number;
-      claimed?: number;
-      queued?: number;
-      label?: string;
-      paused?: boolean;
-      expiresAt?: string;
-      [key: string]: unknown;
-    };
-
-    const dispatched = typeof data.dispatched === 'number' ? data.dispatched : '—';
-    const claimed    = typeof data.claimed    === 'number' ? data.claimed    : '—';
-    const queued     = typeof data.queued     === 'number' ? data.queued     : '—';
-    const total      = (typeof data.dispatched === 'number' ? data.dispatched : 0)
-                     + (typeof data.claimed    === 'number' ? data.claimed    : 0)
-                     + (typeof data.queued     === 'number' ? data.queued     : 0);
+    const data = await res.json() as SessionStats;
+    const { available, inUse, claimed, total } = computeAvailableUsed(data);
+    const fmt = (n: number | null): string => n != null ? String(n) : '—';
 
     const labelHtml = data.label
       ? `<span style="font-weight:600;color:#060a40;">${escapeHtml(String(data.label))}</span> &mdash; `
@@ -1342,10 +1374,10 @@ async function lookupDistributionLink(): Promise<void> {
         ${labelHtml}<code style="font-size:12px;color:#6a6c8c;">${escapeHtml(slug)}</code>
       </div>
       <div style="display:flex;gap:16px;font-size:12px;color:#6a6c8c;">
-        <div class="stat-item"><span class="stat-num">${typeof total === 'number' && total > 0 ? total : '—'}</span><span>Total</span></div>
-        <div class="stat-item"><span class="stat-num orange">${dispatched}</span><span>Dispatched</span></div>
-        <div class="stat-item"><span class="stat-num green">${claimed}</span><span>Claimed</span></div>
-        <div class="stat-item"><span class="stat-num">${queued}</span><span>Queued</span></div>
+        <div class="stat-item"><span class="stat-num">${fmt(total)}</span><span>Total</span></div>
+        <div class="stat-item"><span class="stat-num green">${fmt(available)}</span><span>Available</span></div>
+        <div class="stat-item"><span class="stat-num orange">${fmt(inUse)}</span><span>In use</span></div>
+        <div class="stat-item"><span class="stat-num gray">${fmt(claimed)}</span><span>Claimed</span></div>
       </div>
     `;
   } catch (e) {
@@ -1445,6 +1477,20 @@ function openSession(session: Session): void {
   }
 }
 
+function refreshStatsSummary(s: Session): void {
+  const summaryEl = document.getElementById('statsSummary')!;
+  const fallbackTotal = (s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0);
+  fetch(`${REFERRALS_BASE}/d/${s.slug}/stats`)
+    .then(r => r.ok ? r.json() : null)
+    .then((data: SessionStats | null) => {
+      if (!data || currentSession?.id !== s.id) return;
+      const { available, inUse, claimed, total } = computeAvailableUsed(data);
+      const fmt = (n: number | null): string => n != null ? String(n) : '—';
+      summaryEl.textContent = `${fmt(available)} available, ${fmt(inUse)} in use, ${fmt(claimed)} claimed, ${fmt(total ?? fallbackTotal)} total`;
+    })
+    .catch(() => { /* non-fatal */ });
+}
+
 function renderSessionDetail(s: Session): void {
   document.getElementById('detailLabel')!.textContent = s.label || '(unnamed)';
 
@@ -1453,10 +1499,10 @@ function renderSessionDetail(s: Session): void {
   document.getElementById('detailMeta')!.textContent =
     `${s.paused ? 'Paused' : 'Active'}${expiryStr}`;
 
-  const total      = (s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0);
-  const claimed    = s.claimedCount ?? 0;
-  const dispatched = s.dispatchedCount ?? 0;
-  document.getElementById('statsSummary')!.textContent = `${claimed} claimed, ${dispatched} dispatched, ${total} total`;
+  const fallbackTotal = (s.queuedCount ?? 0) + (s.dispatchedCount ?? 0) + (s.claimedCount ?? 0);
+  const summaryEl     = document.getElementById('statsSummary')!;
+  summaryEl.textContent = `— available, — in use, — claimed, ${fallbackTotal} total`;
+  refreshStatsSummary(s);
 
   const pauseBtn = document.getElementById('pauseBtn') as HTMLButtonElement;
   pauseBtn.textContent = s.paused ? '▶' : '⏸';
@@ -1889,9 +1935,7 @@ function makeKeyRow(k: KeyEntry): HTMLDivElement {
         }
 
         row.remove();
-        const summaryEl = document.getElementById('statsSummary')!;
-        const m = summaryEl.textContent?.match(/(\d+) claimed, (\d+) total/);
-        if (m) summaryEl.textContent = `${m[1]} claimed, ${Math.max(0, parseInt(m[2]) - 1)} total`;
+        if (currentSession) refreshStatsSummary(currentSession);
       } catch (err) {
         alert('Failed to remove: ' + (err as Error).message);
         btn.disabled = false;
@@ -2045,10 +2089,7 @@ async function doReassign(targetSessionId: string, _targetSessionLabel: string):
     reassignKey = null;
 
     await refreshSessions();
-
-    const summaryEl = document.getElementById('statsSummary')!;
-    const m = summaryEl.textContent?.match(/(\d+) claimed, (\d+) total/);
-    if (m) summaryEl.textContent = `${m[1]} claimed, ${Math.max(0, parseInt(m[2]) - 1)} total`;
+    if (currentSession) refreshStatsSummary(currentSession);
   } catch (e) {
     showResult(result, 'error', 'Failed: ' + (e as Error).message);
     btn.disabled = false;
