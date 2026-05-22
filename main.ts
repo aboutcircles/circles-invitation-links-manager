@@ -172,7 +172,7 @@ const INVITATION_FARM_ABI = [{
 const publicClient = createPublicClient({ chain: gnosis, transport: http('https://rpc.gnosischain.com') });
 
 const inviteFarm = new InviteFarm({
-  circlesRpcUrl:            'https://rpc.aboutcircles.com',
+  circlesRpcUrl:            'https://rpc.gnosischain.com',
   pathfinderUrl:            'https://pathfinder.aboutcircles.com',
   profileServiceUrl:        'https://profile.aboutcircles.com',
   referralsServiceUrl:      REFERRALS_BASE,
